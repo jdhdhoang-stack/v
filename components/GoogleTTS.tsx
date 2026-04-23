@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { Volume2, Download, Trash2, Layers, Loader2, Music, CheckCircle2, Sparkles, FileText, Film, RefreshCcw, Play } from 'lucide-react';
+import { Volume2, Download, Trash2, Layers, Loader2, Music, CheckCircle2, Sparkles, FileText, Film, RefreshCcw, Play, History, Globe } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { AudioVisualizer } from './AudioVisualizer';
 import { aiService } from '../services/aiService';
@@ -16,11 +16,35 @@ interface GoogleChunk {
     error?: string;
 }
 
+const LANGUAGES = [
+    { code: 'vi', name: 'Tiếng Việt' },
+    { code: 'en', name: 'English (United States)' },
+    { code: 'en-uk', name: 'English (United Kingdom)' },
+    { code: 'ja', name: 'Japanese' },
+    { code: 'ko', name: 'Korean' },
+    { code: 'zh', name: 'Chinese' },
+    { code: 'fr', name: 'French' },
+    { code: 'de', name: 'German' },
+    { code: 'it', name: 'Italian' },
+    { code: 'es', name: 'Spanish' },
+    { code: 'ru', name: 'Russian' },
+    { code: 'th', name: 'Thai' },
+    { code: 'id', name: 'Indonesian' },
+];
+
 export const GoogleTTS: React.FC = () => {
     const [text, setText] = useState('');
     const [lang, setLang] = useState('vi');
-    const [chunks, setChunks] = useState<GoogleChunk[]>([]);
+    const [chunks, setChunks] = useState<GoogleChunk[]>(() => {
+        const saved = localStorage.getItem('vocalis_google_history');
+        return saved ? JSON.parse(saved) : [];
+    });
     const [isProcessing, setIsProcessing] = useState(false);
+
+    // Save to localStorage whenever chunks change
+    useEffect(() => {
+        localStorage.setItem('vocalis_google_history', JSON.stringify(chunks));
+    }, [chunks]);
     const [mergedAudioUrl, setMergedAudioUrl] = useState<string | null>(null);
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [retryAttempt, setRetryAttempt] = useState(0);
@@ -71,8 +95,12 @@ export const GoogleTTS: React.FC = () => {
             text: t,
             status: 'pending'
         }));
-        setChunks(prev => [...prev, ...newChunks]);
+        setChunks(prev => [...newChunks, ...prev]); // Prepend for better "latest" view
         setText('');
+        // Auto process if it's the first set of chunks
+        if (chunks.length === 0) {
+           setTimeout(() => processQueue(), 100);
+        }
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -89,7 +117,7 @@ export const GoogleTTS: React.FC = () => {
                     text: t,
                     status: 'pending'
                 }));
-                setChunks(prev => [...prev, ...newChunks]);
+                setChunks(prev => [...newChunks, ...prev]);
             } else {
                 const newChunks: GoogleChunk[] = content.map(item => ({
                     id: uuidv4(),
@@ -97,8 +125,9 @@ export const GoogleTTS: React.FC = () => {
                     timestamp: item.timestamp,
                     status: 'pending'
                 }));
-                setChunks(prev => [...prev, ...newChunks]);
+                setChunks(prev => [...newChunks, ...prev]);
             }
+            setTimeout(() => processQueue(), 100);
         } catch (err: any) {
             alert(err.message);
         }
@@ -159,6 +188,7 @@ export const GoogleTTS: React.FC = () => {
             const timer = setTimeout(() => {
                 setRetryAttempt(prev => prev + 1);
                 retryAllFailed();
+                processQueue();
             }, 1500);
             return () => clearTimeout(timer);
         }
@@ -261,177 +291,194 @@ export const GoogleTTS: React.FC = () => {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="space-y-6">
-                <div className="bg-[#121212] border border-[#262626] rounded-2xl p-6 space-y-6">
-                    <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-emerald-900/30 rounded-xl border border-emerald-900/20">
-                                <Volume2 className="w-5 h-5 text-emerald-400" />
-                            </div>
-                            <div>
-                                <h2 className="text-lg font-bold text-white">Google TTS Pro</h2>
-                                <p className="text-xs text-gray-500 font-medium">Phiên bản hỗ trợ đầy đủ tính năng</p>
-                            </div>
-                        </div>
-                        <button
-                            onClick={handleOptimize}
-                            disabled={!text.trim() || isOptimizing}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all ${
-                                isOptimizing 
-                                ? 'bg-purple-900/40 text-purple-400 border-purple-900/30' 
-                                : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-purple-500 hover:text-purple-400'
-                            }`}
-                        >
-                            <Sparkles size={14} className={isOptimizing ? 'animate-spin' : ''} />
-                            {isOptimizing ? 'Đang tối ưu...' : 'Tối ưu AI'}
-                        </button>
-                    </div>
+        <div className="max-w-4xl mx-auto space-y-12 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            {/* Header section inspired by Sound of Text */}
+            <div className="text-center space-y-4">
+                <h2 className="text-4xl font-black text-white tracking-tight flex items-center justify-center gap-4">
+                   <div className="p-3 bg-emerald-500 rounded-2xl shadow-lg rotate-3">
+                       <Volume2 className="w-8 h-8 text-black" strokeWidth={3} />
+                   </div>
+                   Vocalis Google <span className="text-emerald-500">TTS</span>
+                </h2>
+                <p className="text-gray-500 font-medium max-w-md mx-auto text-sm leading-relaxed">
+                    Tạo giọng đọc từ Google Translate với khả năng chia nhỏ văn bản dài và gộp audio tự động.
+                </p>
+            </div>
 
-                    <div className="space-y-4">
-                        <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-gray-400 ml-1">Ngôn ngữ</label>
-                            <select
+            {/* Input Card */}
+            <div className="bg-[#121212] border border-[#262626] rounded-3xl p-8 shadow-2xl relative overflow-hidden group">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-500 opacity-20"></div>
+                
+                <div className="space-y-6 relative z-10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                             <div className="flex items-center gap-2 text-xs font-black text-gray-500 uppercase tracking-widest mb-1 ml-1">
+                                <Globe size={14} className="text-emerald-500" /> Ngôn ngữ
+                             </div>
+                             <select
                                 value={lang}
                                 onChange={(e) => setLang(e.target.value)}
-                                className="w-full bg-[#1A1A1A] border border-[#262626] rounded-xl p-3 text-sm text-gray-200 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium"
+                                className="w-full bg-[#1A1A1A] border-2 border-[#262626] rounded-2xl p-4 text-sm font-bold text-gray-200 outline-none focus:border-emerald-500 transition-all cursor-pointer hover:bg-[#202020] appearance-none"
                             >
-                                <option value="vi">Tiếng Việt</option>
-                                <option value="en">Tiếng Anh (US)</option>
-                                <option value="ja">Tiếng Nhật</option>
-                                <option value="ko">Tiếng Hàn</option>
-                                <option value="zh">Tiếng Trung</option>
+                                {LANGUAGES.map(l => (
+                                    <option key={l.code} value={l.code}>{l.name}</option>
+                                ))}
                             </select>
                         </div>
 
-                        <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-gray-400 ml-1">Văn bản</label>
-                            <textarea
-                                value={text}
-                                onChange={(e) => setText(e.target.value)}
-                                placeholder="Nhập văn bản dài hoặc tải file SRT, TXT, DOCX..."
-                                rows={8}
-                                className="w-full bg-[#1A1A1A] border border-[#262626] rounded-xl p-4 text-sm text-gray-200 resize-none outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium leading-relaxed"
-                            />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="flex items-end gap-3 pb-0.5">
                             <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".srt,.txt,.docx" className="hidden" />
                             <button
                                 onClick={() => fileInputRef.current?.click()}
-                                className="py-3 bg-[#1A1A1A] border border-[#262626] text-gray-400 rounded-xl font-bold uppercase tracking-wider text-[10px] hover:bg-[#262626] hover:text-white transition-all flex items-center justify-center gap-2"
+                                className="flex-1 py-4 px-6 bg-[#1A1A1A] border-2 border-[#262626] rounded-2xl text-xs font-black uppercase text-gray-400 hover:border-blue-500/50 hover:text-blue-400 transition-all flex items-center justify-center gap-3"
                             >
-                                <FileText size={14} /> Tải tệp lên
+                                <FileText size={18} /> File SRT / TXT
                             </button>
                             <button
-                                onClick={handleAddContent}
-                                disabled={!text.trim()}
-                                className="py-3 bg-emerald-600/10 border border-emerald-600/20 text-emerald-400 rounded-xl font-bold uppercase tracking-wider text-[10px] hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-20 shadow-lg"
+                                onClick={handleOptimize}
+                                disabled={!text.trim() || isOptimizing}
+                                className="p-4 bg-purple-500/10 border-2 border-purple-500/20 rounded-2xl text-purple-400 hover:bg-purple-500 hover:text-white transition-all disabled:opacity-10"
+                                title="Tối ưu nội dung"
                             >
-                                Thêm hàng chờ
+                                <Sparkles size={20} className={isOptimizing ? 'animate-spin' : ''} />
                             </button>
                         </div>
-                        
-                        <button
-                            onClick={() => { setRetryAttempt(0); processQueue(); }}
-                            disabled={isProcessing || chunks.filter(c => c.status === 'pending').length === 0}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold uppercase tracking-widest text-sm transition-all disabled:opacity-20 flex items-center justify-center gap-3"
-                        >
-                            {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Play size={18} fill="currentColor" />}
-                            {isProcessing ? 'Đang tạo Audio...' : 'Bắt đầu tổng hợp'}
-                        </button>
                     </div>
-                </div>
 
-                {mergedAudioUrl && (
-                    <div className="bg-emerald-900/10 border border-emerald-900/20 rounded-2xl p-6 space-y-4 animate-in zoom-in duration-300">
-                        <div className="flex justify-between items-center">
-                            <h3 className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-2">
-                                <CheckCircle2 size={14} />
-                                Đã kết hợp xong (Master)
-                            </h3>
-                            <button 
-                                onClick={() => setIsVideoModalOpen(true)}
-                                className="flex items-center gap-2 py-1.5 px-4 bg-blue-600 text-white rounded-lg text-[10px] font-bold uppercase hover:bg-blue-700 transition-all"
-                            >
-                                <Film size={14} /> Sản xuất Video
-                            </button>
-                        </div>
-                        <audio controls src={mergedAudioUrl} className="w-full h-10 invert brightness-200 hue-rotate-180" />
-                        <button
-                            onClick={handleDownloadAll}
-                            className="w-full py-3 bg-[#1A1A1A] border border-[#262626] text-white rounded-xl font-bold uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 hover:bg-[#262626]"
-                        >
-                            <Download size={14} /> Tải xuống file .wav
-                        </button>
+                    <div className="space-y-2">
+                         <div className="flex justify-between items-center px-1">
+                             <div className="text-xs font-black text-gray-500 uppercase tracking-widest">Nội dung</div>
+                             <div className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">{text.length} ký tự</div>
+                         </div>
+                         <textarea
+                            value={text}
+                            onChange={(e) => setText(e.target.value)}
+                            placeholder="Nhập nội dung cần chuyển sang giọng nói..."
+                            className="w-full bg-[#1A1A1A] border-2 border-[#262626] rounded-3xl p-6 text-sm font-medium text-gray-200 min-h-[150px] resize-none outline-none focus:border-emerald-500 transition-all focus:ring-4 focus:ring-emerald-500/5"
+                        />
                     </div>
-                )}
+
+                    <button
+                        onClick={handleAddContent}
+                        disabled={!text.trim() || isProcessing}
+                        className="w-full py-5 bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-black rounded-2xl font-black uppercase tracking-widest text-sm transition-all shadow-[0_8px_0_rgb(5,150,105)] disabled:opacity-20 disabled:shadow-none translate-y-[-4px] active:translate-y-0 active:shadow-none"
+                    >
+                        {isProcessing ? 'Đang đọc văn bản...' : 'Submit'}
+                    </button>
+                </div>
             </div>
 
-            <div className="bg-[#121212] border border-[#262626] rounded-2xl flex flex-col h-full min-h-[600px] overflow-hidden">
-                <div className="p-4 border-b border-[#262626] flex justify-between items-center bg-[#0d0d0d]">
-                    <div className="flex items-center gap-2">
-                        <Music className="w-4 h-4 text-emerald-400" />
-                        <span className="text-xs font-bold text-white uppercase tracking-wider">Phân đoạn ({successfulChunksCount}/{totalChunksCount})</span>
+            {/* Global Actions for Merged Audio */}
+            {mergedAudioUrl && (
+                <div className="bg-[#059669] rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl animate-in zoom-in duration-500">
+                    <div className="flex items-center gap-5">
+                        <div className="p-4 bg-white/20 rounded-2xl border border-white/10">
+                            <CheckCircle2 className="w-8 h-8 text-white" />
+                        </div>
+                        <div className="text-white text-left">
+                            <h3 className="text-lg font-black uppercase tracking-wide">Audio Master Sẵn sàng</h3>
+                            <p className="text-white/70 text-xs font-bold uppercase tracking-widest mt-1">Gộp từ {successfulChunksCount} phân đoạn</p>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        {failedChunksCount > 0 && !isProcessing && (
-                            <button 
-                                onClick={() => { setRetryAttempt(0); retryAllFailed(); }}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/20 text-amber-500 rounded-lg text-[9px] font-bold uppercase border border-amber-900/20 hover:bg-amber-600 hover:text-white transition-all"
-                            >
-                                <RefreshCcw size={12} /> Thử lại ({failedChunksCount})
-                            </button>
-                        )}
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                        <audio controls src={mergedAudioUrl} className="h-10 opacity-60 hover:opacity-100 transition-opacity flex-grow brightness-150 saturate-0 contrast-125" />
                         <button 
-                            onClick={() => { setChunks([]); setMergedAudioUrl(null); }} 
-                            className="p-1.5 hover:bg-red-900/20 text-gray-500 hover:text-red-400 rounded-lg transition-all"
+                            onClick={handleDownloadAll}
+                            className="p-3 bg-white text-emerald-600 rounded-xl hover:scale-110 transition-transform shadow-xl"
+                            title="Tải xuống Master"
                         >
-                            <Trash2 size={16} />
+                            <Download size={20} strokeWidth={3} />
+                        </button>
+                        <button 
+                            onClick={() => setIsVideoModalOpen(true)}
+                            className="p-3 bg-blue-500 text-white rounded-xl hover:scale-110 transition-transform shadow-xl"
+                            title="Tạo Video"
+                        >
+                            <Film size={20} strokeWidth={3} />
                         </button>
                     </div>
                 </div>
+            )}
 
-                <div className="flex-grow overflow-y-auto p-4 space-y-3 scrollbar-hide">
+            {/* Results Section */}
+            <div className="space-y-6">
+                <div className="flex justify-between items-center px-4">
+                    <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                        <History size={16} /> Lịch sử phân đoạn ({successfulChunksCount}/{totalChunksCount})
+                    </h3>
+                    <div className="flex items-center gap-4">
+                         {failedChunksCount > 0 && (
+                            <button 
+                                onClick={() => { setRetryAttempt(0); retryAllFailed(); processQueue(); }}
+                                className="text-[10px] font-black text-amber-500 uppercase flex items-center gap-1 hover:text-amber-400 transition-colors"
+                            >
+                                <RefreshCcw size={12} /> Thử lại {failedChunksCount} lỗi
+                            </button>
+                         )}
+                         <button 
+                            onClick={() => { setChunks([]); setMergedAudioUrl(null); }}
+                            className="text-[10px] font-black text-gray-600 uppercase flex items-center gap-1 hover:text-red-500 transition-colors"
+                         >
+                            <Trash2 size={12} /> Xóa hết
+                         </button>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
                     {chunks.map((chunk, i) => (
-                        <div key={chunk.id} className={`p-4 rounded-xl border border-[#262626] bg-[#1A1A1A] space-y-3 relative group transition-all ${chunk.status === 'error' ? 'border-red-900/30' : ''}`}>
-                            <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-3">
-                                    <span className="text-[10px] font-bold text-gray-500 uppercase">Đoạn {i + 1}</span>
+                        <div key={chunk.id} className="bg-[#121212] border border-[#262626] rounded-3xl p-6 transition-all hover:bg-[#151515] hover:border-[#363636] group animate-in slide-in-from-left-4 duration-300">
+                            <div className="flex flex-col md:flex-row gap-6">
+                                <div className="flex-grow space-y-3">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-[#1A1A1A] flex items-center justify-center text-[10px] font-black text-emerald-500 border border-[#262626]">
+                                            {(totalChunksCount - i).toString().padStart(2, '0')}
+                                        </div>
+                                        <div className="flex-grow">
+                                            <p className="text-sm font-medium text-gray-300 leading-relaxed italic line-clamp-2">
+                                                "{chunk.text}"
+                                            </p>
+                                        </div>
+                                    </div>
                                     {chunk.timestamp && (
-                                        <span className="text-[9px] font-mono text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded italic">
-                                            {chunk.timestamp}
-                                        </span>
+                                        <div className="inline-block px-3 py-1 bg-emerald-500/5 text-emerald-500 text-[10px] font-bold rounded-lg border border-emerald-500/10">
+                                            Timeline: {chunk.timestamp}
+                                        </div>
                                     )}
                                 </div>
-                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${
-                                    chunk.status === 'finished' ? 'bg-emerald-900/30 text-emerald-400' :
-                                    chunk.status === 'processing' ? 'bg-blue-900/30 text-blue-400 animate-pulse' :
-                                    chunk.status === 'error' ? 'bg-red-900/30 text-red-500' :
-                                    'bg-gray-800 text-gray-500'
-                                }`}>
-                                    {chunk.status === 'finished' ? 'Hoàn thành' : 
-                                     chunk.status === 'processing' ? 'Đang đọc...' : 
-                                     chunk.status === 'error' ? 'Thất bại' : 'Chờ'}
-                                </span>
+
+                                <div className="flex items-center gap-4 border-t md:border-t-0 md:border-l border-[#262626] pt-4 md:pt-0 md:pl-6 min-w-[200px] justify-between md:justify-end">
+                                    {chunk.status === 'processing' && (
+                                        <div className="flex items-center gap-2 text-blue-500 text-[10px] font-black uppercase">
+                                            <Loader2 size={14} className="animate-spin" /> Đang đọc...
+                                        </div>
+                                    )}
+                                    {chunk.status === 'error' && (
+                                        <div className="text-red-500 text-[10px] font-black uppercase">Lỗi kết nối</div>
+                                    )}
+                                    {chunk.status === 'finished' && chunk.audioUrl && (
+                                        <div className="flex items-center gap-3 w-full">
+                                             <AudioVisualizer audioUrl={chunk.audioUrl} height={30} />
+                                             <a 
+                                                href={chunk.audioUrl} 
+                                                download={`vocalis_gg_${i}.mp3`}
+                                                className="p-3 bg-[#1A1A1A] text-gray-400 rounded-xl hover:text-emerald-500 transition-colors"
+                                            >
+                                                <Download size={16} />
+                                             </a>
+                                        </div>
+                                    )}
+                                    {chunk.status === 'pending' && (
+                                         <div className="text-gray-600 text-[10px] font-black uppercase tracking-widest">Đang chờ...</div>
+                                    )}
+                                </div>
                             </div>
-                            <p className="text-xs text-gray-300 leading-relaxed line-clamp-2 italic">"{chunk.text}"</p>
-                            {chunk.status === 'finished' && chunk.audioUrl && (
-                                <AudioVisualizer audioUrl={chunk.audioUrl} height={32} />
-                            )}
-                            {chunk.status === 'error' && (
-                                <p className="text-[9px] text-red-500 font-bold uppercase">Sự cố kết nối với Google</p>
-                            )}
                         </div>
                     ))}
 
                     {chunks.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-10 py-20">
-                            <Layers size={64} />
-                            <div className="text-center">
-                                <p className="text-sm font-bold uppercase tracking-widest">Hàng chờ trống</p>
-                                <p className="text-[10px] uppercase mt-1">Hãy nhập nội dung hoặc tải file để bắt đầu</p>
-                            </div>
+                        <div className="py-20 text-center flex flex-col items-center justify-center space-y-4 opacity-10">
+                            <Layers size={64} strokeWidth={1} />
+                            <p className="text-sm font-black uppercase tracking-widest">Chưa có bản ghi nào</p>
                         </div>
                     )}
                 </div>

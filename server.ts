@@ -4,6 +4,7 @@ import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { Readable } from 'stream';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,43 +23,50 @@ async function startServer() {
             return res.status(400).send('Missing text or lang');
         }
 
-        // Try different clients if one fails. gtx is usually the most stable for non-browser use.
         const clients = ['gtx', 'tw-ob', 't'];
-        let lastError = null;
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text as string)}&tl=${lang}&client=gtx`;
+        
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': 'https://translate.google.com/',
+                }
+            });
 
-        for (const client of clients) {
-            const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text as string)}&tl=${lang}&client=${client}`;
+            if (!response.ok) {
+                return res.status(response.status).send('Google TTS error');
+            }
+
+            // Stream the response back to the client
+            res.set('Content-Type', 'audio/mpeg');
+            res.set('Cache-Control', 'public, max-age=31536000');
             
-            try {
-                const response = await fetch(url, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Referer': 'https://translate.google.com/',
-                        'Accept': '*/*',
-                        'Accept-Language': 'vi,en-US;q=0.9,en;q=0.8'
+            if (response.body) {
+                // Node.js fetch body is a ReadableStream
+                const reader = response.body.getReader();
+                const stream = new ReadableStream({
+                    async start(controller) {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            controller.enqueue(value);
+                        }
+                        controller.close();
                     }
                 });
-
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    const buffer = Buffer.from(arrayBuffer);
-                    res.set('Content-Type', 'audio/mpeg');
-                    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-                    return res.send(buffer);
-                }
                 
-                lastError = `Status: ${response.status} with client ${client}`;
-                if (response.status === 429) {
-                    // If rate limited, wait a bit before trying next client
-                    await new Promise(r => setTimeout(r, 500));
-                }
-            } catch (error: any) {
-                lastError = error.message;
+                // Convert Web ReadableStream to Node.js Readable if necessary or just send chunks
+                // In modern Node, we can use:
+                const nodeStream = (Readable as any).fromWeb(stream);
+                nodeStream.pipe(res);
+            } else {
+                res.status(500).send('Empty body from Google');
             }
+        } catch (error: any) {
+            console.error('Proxy error:', error);
+            res.status(500).send(`Internal Server Error: ${error.message}`);
         }
-
-        console.error('Final Proxy error:', lastError);
-        res.status(500).send(`Google TTS error: ${lastError}`);
     });
 
     // Vite middleware setup
