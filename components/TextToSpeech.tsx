@@ -20,6 +20,8 @@ export const TextToSpeech: React.FC = () => {
     const [requestDelay, setRequestDelay] = useState(500);
     const [mergedAudioUrl, setMergedAudioUrl] = useState<string | null>(null);
     const [shouldProcess, setShouldProcess] = useState(false);
+    const [retryAttempt, setRetryAttempt] = useState(0);
+    const MAX_AUTO_RETRIES = 3;
     
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -31,6 +33,18 @@ export const TextToSpeech: React.FC = () => {
     
     useEffect(() => {
         const areAllJobsDone = totalChunksCount > 0 && chunks.every(c => c.status === 'finished' || c.status === 'error');
+        
+        if (processingState === 'idle' && areAllJobsDone && failedChunksCount > 0 && retryAttempt < MAX_AUTO_RETRIES) {
+            const timer = setTimeout(() => {
+                setRetryAttempt(prev => prev + 1);
+                retryAllFailed();
+            }, 1000); // 1s delay before auto-retry
+            return () => clearTimeout(timer);
+        }
+    }, [processingState, totalChunksCount, failedChunksCount, retryAttempt]);
+
+    useEffect(() => {
+        const areAllJobsDone = totalChunksCount > 0 && chunks.every(c => c.status === 'finished' || c.status === 'error');
         const hasFinishedChunks = chunks.some(c => c.status === 'finished');
 
         if (processingState === 'idle' && areAllJobsDone && hasFinishedChunks && failedChunksCount === 0) {
@@ -39,15 +53,75 @@ export const TextToSpeech: React.FC = () => {
                     const finishedChunks = chunks.filter(c => c.status === 'finished' && c.audioUrl);
                     if (finishedChunks.length === 0) return;
 
-                    const blobs = await Promise.all(
-                        finishedChunks.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
+                    const hasTimestamps = finishedChunks.some(c => !!c.timestamp);
+
+                    if (!hasTimestamps) {
+                        // Simple concatenation for plain text
+                        const blobs = await Promise.all(
+                            finishedChunks.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
+                        );
+                        const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                        setMergedAudioUrl(prev => {
+                            if (prev) URL.revokeObjectURL(prev);
+                            return URL.createObjectURL(mergedBlob);
+                        });
+                        return;
+                    }
+
+                    // Precise timing for SRT
+                    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                    const audioBuffers = await Promise.all(
+                        finishedChunks.map(async chunk => {
+                            const response = await fetch(chunk.audioUrl!);
+                            const arrayBuffer = await response.arrayBuffer();
+                            return await audioContext.decodeAudioData(arrayBuffer);
+                        })
                     );
-                    const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+
+                    const parseTimestamp = (ts: string): number => {
+                        try {
+                            const [time, ms] = ts.split(',');
+                            const [h, m, s] = time.split(':').map(Number);
+                            return h * 3600 + m * 60 + s + (parseInt(ms, 10) / 1000);
+                        } catch (e) {
+                            return 0;
+                        }
+                    };
+
+                    // Calculate total duration
+                    let totalDuration = 0;
+                    finishedChunks.forEach((chunk, i) => {
+                        const start = chunk.timestamp ? parseTimestamp(chunk.timestamp) : totalDuration;
+                        const end = start + audioBuffers[i].duration;
+                        if (end > totalDuration) totalDuration = end;
+                    });
+
+                    // Create offline context for rendering
+                    const offlineContext = new OfflineAudioContext(
+                        1, // mono is fine for TTS
+                        Math.ceil(totalDuration * 44100),
+                        44100
+                    );
+
+                    finishedChunks.forEach((chunk, i) => {
+                        const bufferSource = offlineContext.createBufferSource();
+                        bufferSource.buffer = audioBuffers[i];
+                        const startTime = chunk.timestamp ? parseTimestamp(chunk.timestamp) : 0; 
+                        bufferSource.connect(offlineContext.destination);
+                        bufferSource.start(startTime);
+                    });
+
+                    const renderedBuffer = await offlineContext.startRendering();
+                    
+                    // Convert AudioBuffer to Blob (as WAV since MP3 encoding is harder in browser without library)
+                    const wavBlob = audioBufferToWav(renderedBuffer);
                     
                     setMergedAudioUrl(prev => {
                         if (prev) URL.revokeObjectURL(prev);
-                        return URL.createObjectURL(mergedBlob);
+                        return URL.createObjectURL(wavBlob);
                     });
+                    
+                    await audioContext.close();
                 } catch (error) {
                     console.error("Gộp file âm thanh thất bại:", error);
                 }
@@ -59,9 +133,58 @@ export const TextToSpeech: React.FC = () => {
                 setMergedAudioUrl(null);
             }
         }
-    }, [processingState, totalChunksCount, failedChunksCount]); // Removed chunks from deps to avoid re-running on every chunk update
+    }, [processingState, totalChunksCount, failedChunksCount]);
+
+    // Helper to convert AudioBuffer to WAV blob
+    const audioBufferToWav = (buffer: AudioBuffer): Blob => {
+        const numOfChan = buffer.numberOfChannels;
+        const length = buffer.length * numOfChan * 2 + 44;
+        const bufferArr = new ArrayBuffer(length);
+        const view = new DataView(bufferArr);
+        const channels = [];
+        let i;
+        let sample;
+        let offset = 0;
+        let pos = 0;
+
+        // Write WAV header
+        const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
+        const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
+
+        setUint32(0x46464952); // "RIFF"
+        setUint32(length - 8); // file length - 8
+        setUint32(0x45564157); // "WAVE"
+        setUint32(0x20746d66); // "fmt " chunk
+        setUint32(16); // length = 16
+        setUint16(1); // PCM (uncompressed)
+        setUint16(numOfChan);
+        setUint32(buffer.sampleRate);
+        setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+        setUint16(numOfChan * 2); // block-align
+        setUint16(16); // 16-bit (hardcoded)
+        setUint32(0x61746164); // "data" - chunk
+        setUint32(length - pos - 4); // chunk length
+
+        // Write interleaved data
+        for (i = 0; i < buffer.numberOfChannels; i++) {
+            channels.push(buffer.getChannelData(i));
+        }
+
+        while (pos < length) {
+            for (i = 0; i < numOfChan; i++) {
+                sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+                sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0; // scale to 16-bit signed int
+                view.setInt16(pos, sample, true);
+                pos += 2;
+            }
+            offset++;
+        }
+
+        return new Blob([bufferArr], { type: 'audio/wav' });
+    };
 
     const addContent = useCallback((content: string | Array<{ text: string; timestamp: string }>) => {
+        setRetryAttempt(0); // Reset retries on new content
         let newChunkJobs: ChunkJob[];
 
         if (typeof content === 'string') {
@@ -115,6 +238,11 @@ export const TextToSpeech: React.FC = () => {
     }, []);
 
     const processQueue = useCallback(async () => {
+        if (retryAttempt === 0) {
+            // Only reset if it's a new manual start, but since we reset on addContent,
+            // we check if it's the first time we start this set.
+        }
+        
         const token = keyManager.getKey('tts');
         
         if (!token) {
@@ -218,6 +346,16 @@ export const TextToSpeech: React.FC = () => {
         }
     }, []);
 
+    const handleManualProcess = useCallback(() => {
+        setRetryAttempt(0);
+        processQueue();
+    }, [processQueue]);
+
+    const handleRetryAllFailed = useCallback(() => {
+        setRetryAttempt(0);
+        retryAllFailed();
+    }, [retryAllFailed]);
+
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
             <Configuration
@@ -227,7 +365,7 @@ export const TextToSpeech: React.FC = () => {
                 onCountryChange={handleCountryChange}
                 speakerGroups={SPEAKER_GROUPS}
                 isProcessing={processingState === 'processing'}
-                onProcessQueue={processQueue}
+                onProcessQueue={handleManualProcess}
                 onAddContent={addContent}
                 pendingChunksCount={pendingChunksCount}
                 maxChars={maxChars}
@@ -248,7 +386,7 @@ export const TextToSpeech: React.FC = () => {
                 onClearQueue={clearQueue}
                 onDownloadAll={handleDownloadAll}
                 onRetryChunk={retryChunk}
-                onRetryAllFailed={retryAllFailed}
+                onRetryAllFailed={handleRetryAllFailed}
                 successfulChunksCount={successfulChunksCount}
                 failedChunksCount={failedChunksCount}
                 remainingChunksCount={remainingChunksCount}
