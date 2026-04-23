@@ -22,30 +22,43 @@ async function startServer() {
             return res.status(400).send('Missing text or lang');
         }
 
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text as string)}&tl=${lang}&client=tw-ob`;
-        
-        try {
-            const response = await fetch(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Referer': 'https://translate.google.com/'
+        // Try different clients if one fails. gtx is usually the most stable for non-browser use.
+        const clients = ['gtx', 'tw-ob', 't'];
+        let lastError = null;
+
+        for (const client of clients) {
+            const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text as string)}&tl=${lang}&client=${client}`;
+            
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Referer': 'https://translate.google.com/',
+                        'Accept': '*/*',
+                        'Accept-Language': 'vi,en-US;q=0.9,en;q=0.8'
+                    }
+                });
+
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    res.set('Content-Type', 'audio/mpeg');
+                    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+                    return res.send(buffer);
                 }
-            });
-
-            if (!response.ok) {
-                console.error(`Google TTS error: ${response.status} ${response.statusText}`);
-                return res.status(response.status).send('Google TTS error');
+                
+                lastError = `Status: ${response.status} with client ${client}`;
+                if (response.status === 429) {
+                    // If rate limited, wait a bit before trying next client
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } catch (error: any) {
+                lastError = error.message;
             }
-
-            const arrayBuffer = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-
-            res.set('Content-Type', 'audio/mpeg');
-            res.send(buffer);
-        } catch (error) {
-            console.error('Proxy error:', error);
-            res.status(500).send('Internal Server Error');
         }
+
+        console.error('Final Proxy error:', lastError);
+        res.status(500).send(`Google TTS error: ${lastError}`);
     });
 
     // Vite middleware setup

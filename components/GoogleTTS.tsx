@@ -128,16 +128,21 @@ export const GoogleTTS: React.FC = () => {
             setChunks(prev => prev.map(c => c.id === chunk.id ? { ...c, status: 'processing', error: undefined } : c));
             
             try {
-                // Use local proxy to bypass CORS and avoid blocking
-                const proxyUrl = `/api/proxy/google-tts?text=${encodeURIComponent(chunk.text)}&lang=${lang}`;
+                // Use local proxy with cache-busting to avoid stale errors
+                const proxyUrl = `/api/proxy/google-tts?text=${encodeURIComponent(chunk.text)}&lang=${lang}&v=${Date.now()}`;
                 
-                // Fetch to verify and get the actual data for merging later
+                // Fetch to verify and get the actual data
                 const res = await fetch(proxyUrl);
-                if (!res.ok) throw new Error('Proxy error');
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    throw new Error(errorText);
+                }
 
+                await new Promise(r => setTimeout(r, 1200)); // Increased rate limiting delay
                 setChunks(prev => prev.map(c => c.id === chunk.id ? { ...c, status: 'finished', audioUrl: proxyUrl } : c));
-            } catch (error) {
-                setChunks(prev => prev.map(c => c.id === chunk.id ? { ...c, status: 'error', error: 'Lỗi bộ đọc Google (Proxy)' } : c));
+            } catch (error: any) {
+                console.error("Google TTS Proxy Error:", error);
+                setChunks(prev => prev.map(c => c.id === chunk.id ? { ...c, status: 'error', error: error.message || 'Sự cố kết nối' } : c));
             }
         }
         setIsProcessing(false);
