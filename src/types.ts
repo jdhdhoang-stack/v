@@ -16,6 +16,8 @@ export interface ChunkJob {
   audioUrl?: string;
   error?: string | null;
   timestamp?: string;
+  startTime?: number;
+  endTime?: number;
 }
 
 export type ProcessingState = 'idle' | 'processing';

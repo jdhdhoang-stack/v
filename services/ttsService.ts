@@ -31,16 +31,31 @@ class TTSError extends Error {
   }
 }
 
-export const synthesizeChunk = (options: SynthesizeOptions): Promise<string> => {
+export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal): Promise<string> => {
     return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            return reject(new Error('Aborted'));
+        }
+
         const ws = new WebSocket(WSS_URL);
         const audioChunks: Uint8Array[] = [];
         let isSettled = false;
         let timeoutId: number;
 
+        const onAbort = () => {
+            settle(reject, new Error('Aborted'));
+        };
+
+        if (signal) {
+            signal.addEventListener('abort', onAbort);
+        }
+
         const cleanup = () => {
             if (timeoutId) {
                 clearTimeout(timeoutId);
+            }
+            if (signal) {
+                signal.removeEventListener('abort', onAbort);
             }
             if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
                 ws.close();
@@ -58,6 +73,8 @@ export const synthesizeChunk = (options: SynthesizeOptions): Promise<string> => 
         timeoutId = window.setTimeout(() => {
             settle(reject, new TTSError("Tổng hợp TTS đã hết thời gian sau 1 phút."));
         }, 60000);
+
+        ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
             const payload = {
@@ -85,7 +102,13 @@ export const synthesizeChunk = (options: SynthesizeOptions): Promise<string> => 
         ws.onmessage = async (event: MessageEvent) => {
             if (isSettled) return;
 
-            // Handle binary audio data directly
+            // Handle binary audio data directly (as ArrayBuffer since we set binaryType)
+            if (event.data instanceof ArrayBuffer) {
+                audioChunks.push(new Uint8Array(event.data));
+                return;
+            }
+            
+            // Fallback for Blob just in case
             if (event.data instanceof Blob) {
                 const arrayBuffer = await event.data.arrayBuffer();
                 audioChunks.push(new Uint8Array(arrayBuffer));
@@ -102,7 +125,7 @@ export const synthesizeChunk = (options: SynthesizeOptions): Promise<string> => 
                     // Case 1: Direct URL received. This is a final success state.
                     if (payload && typeof payload === "object" && payload.audio_url) {
                        try {
-                           const response = await fetch(payload.audio_url);
+                           const response = await fetch(payload.audio_url, { signal });
                            if (!response.ok) {
                                throw new TTSError(`Tải xuống URL âm thanh thất bại: ${response.statusText}`);
                            }
@@ -121,10 +144,18 @@ export const synthesizeChunk = (options: SynthesizeOptions): Promise<string> => 
                         return;
                     }
                     
-                    // Case 3: Task finished signal. We don't resolve here, but wait for onclose
-                    // to ensure all data packets have been received and processed.
+                    // Case 3: Task finished signal. 
                     if (['TaskFinished', 'Completed', 'Finish'].includes(eventType)) {
-                        return; // Wait for connection close to finalize
+                        // If we have chunks, we can settle now. 
+                        // But wait a tiny bit to see if more chunks arrive or connection closes.
+                        setTimeout(() => {
+                            if (!isSettled && audioChunks.length > 0) {
+                                const audioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+                                const audioUrl = URL.createObjectURL(audioBlob);
+                                settle(resolve, audioUrl);
+                            }
+                        }, 100);
+                        return;
                     }
 
                     // Case 4: Explicit error from the server.

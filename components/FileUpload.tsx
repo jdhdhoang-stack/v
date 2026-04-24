@@ -2,7 +2,7 @@ import React from 'react';
 import { TextProcessor } from '../services/textProcessor';
 
 interface FileUploadProps {
-    onFileProcessed: (content: string, file: File) => void;
+    onFileProcessed: (content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>, file: File) => void;
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {

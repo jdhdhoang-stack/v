@@ -4,8 +4,6 @@ import { Logo } from '../components/Logo';
 import { Settings } from '../components/Settings';
 import { TextToSpeech } from '../components/TextToSpeech';
 import { TextFilter } from '../components/TextFilter';
-import { GoogleTTS } from '../components/GoogleTTS';
-import { ChevronDown, Mic2, Languages, Cpu } from 'lucide-react';
 
 const TabButton: React.FC<{ 
     name: string; 
@@ -29,8 +27,7 @@ const TabButton: React.FC<{
 };
 
 const App: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'tts' | 'google-tts' | 'filter' | 'settings'>('tts');
-    const [isTtsDropdownOpen, setIsTtsDropdownOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings'>('tts');
     
     return (
         <div className="min-h-screen flex flex-col bg-[#0A0A0A]">
@@ -42,45 +39,13 @@ const App: React.FC = () => {
                         <span className="hidden sm:inline-block px-2 py-0.5 bg-[#1A1A1A] text-gray-400 text-[10px] font-bold rounded uppercase tracking-wider">Pro Suite</span>
                     </div>
 
-                    <nav className="flex items-center gap-2">
-                        <div className="relative">
-                            <button
-                                onMouseEnter={() => setIsTtsDropdownOpen(true)}
-                                onClick={() => setIsTtsDropdownOpen(!isTtsDropdownOpen)}
-                                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all rounded-lg ${
-                                    (activeTab === 'tts' || activeTab === 'google-tts')
-                                    ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20' 
-                                    : 'text-gray-400 hover:bg-[#1A1A1A] hover:text-gray-200'
-                                }`}
-                            >
-                                <Mic2 size={16} />
-                                <span>Tổng hợp</span>
-                                <ChevronDown size={14} className={`transition-transform duration-200 ${isTtsDropdownOpen ? 'rotate-180' : ''}`} />
-                            </button>
-
-                            {isTtsDropdownOpen && (
-                                <div 
-                                    onMouseLeave={() => setIsTtsDropdownOpen(false)}
-                                    className="absolute top-full left-0 mt-2 w-48 bg-[#121212] border border-[#262626] rounded-xl shadow-2xl overflow-hidden z-[60] animate-in fade-in slide-in-from-top-2 duration-200"
-                                >
-                                    <button 
-                                        onClick={() => { setActiveTab('tts'); setIsTtsDropdownOpen(false); }}
-                                        className={`w-full flex items-center gap-3 px-4 py-3 text-xs font-bold uppercase tracking-wider transition-all hover:bg-[#1A1A1A] ${activeTab === 'tts' ? 'text-blue-400' : 'text-gray-400'}`}
-                                    >
-                                        <Cpu size={14} />
-                                        Vocalis Engine
-                                    </button>
-                                    <button 
-                                        onClick={() => { setActiveTab('google-tts'); setIsTtsDropdownOpen(false); }}
-                                        className={`w-full flex items-center gap-3 px-4 py-3 text-xs font-bold uppercase tracking-wider transition-all hover:bg-[#1A1A1A] ${activeTab === 'google-tts' ? 'text-emerald-400' : 'text-gray-400'}`}
-                                    >
-                                        <Languages size={14} />
-                                        Google Translate
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-
+                    <nav className="flex items-center gap-1">
+                        <TabButton 
+                            name="Tổng hợp" 
+                            active={activeTab === 'tts'} 
+                            onClick={() => setActiveTab('tts')} 
+                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>}
+                        />
                         <TabButton 
                             name="Lọc văn bản" 
                             active={activeTab === 'filter'} 
@@ -100,7 +65,6 @@ const App: React.FC = () => {
 
             <main className="flex-grow container mx-auto p-6 md:p-10">
                  {activeTab === 'tts' && <TextToSpeech />}
-                 {activeTab === 'google-tts' && <GoogleTTS />}
                  {activeTab === 'filter' && <TextFilter />}
                  {activeTab === 'settings' && <Settings />}
             </main>

@@ -13,7 +13,7 @@ interface ConfigurationProps {
     speakerGroups: SpeakerGroup[];
     isProcessing: boolean;
     onProcessQueue: () => void;
-    onAddContent: (content: string | Array<{ text: string; timestamp: string }>) => void;
+    onAddContent: (content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>) => void;
     pendingChunksCount: number;
     maxChars: number;
     setMaxChars: (value: number) => void;
@@ -54,7 +54,7 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
         }
     };
 
-    const handleFileAdded = (content: string | Array<{ text: string; timestamp: string }>) => {
+    const handleFileAdded = (content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>) => {
         onAddContent(content);
     };
     
@@ -123,32 +123,44 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                             <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Luồng</label>
                                 <input 
-                                    type="number" value={concurrentThreads} 
-                                    onChange={e => setConcurrentThreads(Math.min(100, parseInt(e.target.value, 10)))}
+                                    type="number" value={isNaN(concurrentThreads) ? '' : concurrentThreads} 
+                                    onChange={e => {
+                                        const val = parseInt(e.target.value, 10);
+                                        setConcurrentThreads(isNaN(val) ? 0 : Math.min(100, val));
+                                    }}
                                     className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
                                 />
                             </div>
                             <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Độ trễ (ms)</label>
                                 <input 
-                                    type="number" value={requestDelay} 
-                                    onChange={e => setRequestDelay(parseInt(e.target.value, 10))}
+                                    type="number" value={isNaN(requestDelay) ? '' : requestDelay} 
+                                    onChange={e => {
+                                        const val = parseInt(e.target.value, 10);
+                                        setRequestDelay(isNaN(val) ? 0 : val);
+                                    }}
                                     className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
                                 />
                             </div>
                             <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Ký tự tối đa</label>
                                 <input 
-                                    type="number" value={maxChars} 
-                                    onChange={e => setMaxChars(parseInt(e.target.value, 10))}
+                                    type="number" value={isNaN(maxChars) ? '' : maxChars} 
+                                    onChange={e => {
+                                        const val = parseInt(e.target.value, 10);
+                                        setMaxChars(isNaN(val) ? 0 : val);
+                                    }}
                                     className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
                                 />
                             </div>
                             <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Gộp tối thiểu</label>
                                 <input 
-                                    type="number" value={minCharsToMerge} 
-                                    onChange={e => setMinCharsToMerge(parseInt(e.target.value, 10))}
+                                    type="number" value={isNaN(minCharsToMerge) ? '' : minCharsToMerge} 
+                                    onChange={e => {
+                                        const val = parseInt(e.target.value, 10);
+                                        setMinCharsToMerge(isNaN(val) ? 0 : val);
+                                    }}
                                     className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
                                 />
                             </div>

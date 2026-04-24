@@ -123,7 +123,17 @@ export class TextProcessor {
         return chunks.filter(c => c.length > 0);
     }
     
-    public static async processFromFile(file: File): Promise<string | Array<{ text: string; timestamp: string }>> {
+    public static parseTimestampToSeconds(timestamp: string): number {
+        const parts = timestamp.split(/[:,]/);
+        if (parts.length < 4) return 0;
+        const h = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const s = parseInt(parts[2], 10);
+        const ms = parseInt(parts[3], 10);
+        return h * 3600 + m * 60 + s + ms / 1000;
+    }
+    
+    public static async processFromFile(file: File): Promise<string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>> {
         const extension = file.name.split('.').pop()?.toLowerCase();
         
         return new Promise((resolve, reject) => {
@@ -141,14 +151,20 @@ export class TextProcessor {
                     const content = e.target?.result as string;
                     // SRT Parser: Sequence, Timing, Text, empty line
                     const srtRegex = /(\d+)\r?\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
-                    const items: Array<{ text: string; timestamp: string }> = [];
+                    const items: Array<{ text: string; startTime: number; endTime: number; timestamp: string }> = [];
                     let match;
                     
                     while ((match = srtRegex.exec(content)) !== null) {
                         const start = match[2];
+                        const end = match[3];
                         const text = match[4].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
                         if (text) {
-                            items.push({ text, timestamp: start });
+                            items.push({ 
+                                text, 
+                                startTime: this.parseTimestampToSeconds(start),
+                                endTime: this.parseTimestampToSeconds(end),
+                                timestamp: start 
+                            });
                         }
                     }
                     
@@ -158,9 +174,18 @@ export class TextProcessor {
                         lines.forEach(block => {
                             const linesInBlock = block.split(/\r?\n/);
                             if (linesInBlock.length >= 3) {
-                                const timestamp = linesInBlock[1].split(' --> ')[0];
+                                const timingParts = linesInBlock[1].split(' --> ');
+                                const startTimeStr = timingParts[0];
+                                const endTimeStr = timingParts[1];
                                 const text = linesInBlock.slice(2).join(' ').replace(/<[^>]*>/g, '').trim();
-                                if (text) items.push({ text, timestamp });
+                                if (text) {
+                                    items.push({ 
+                                        text, 
+                                        startTime: this.parseTimestampToSeconds(startTimeStr),
+                                        endTime: this.parseTimestampToSeconds(endTimeStr),
+                                        timestamp: startTimeStr 
+                                    });
+                                }
                             }
                         });
                     }

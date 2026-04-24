@@ -9,6 +9,8 @@ import { ResultsPanel } from './ResultsPanel';
 import { keyManager } from '../services/keyManager';
 import { v4 as uuidv4 } from 'uuid';
 
+import { audioBufferToWav } from '../src/lib/audioUtils';
+
 export const TextToSpeech: React.FC = () => {
     const [chunks, setChunks] = useState<ChunkJob[]>([]);
     const [speaker, setSpeaker] = useState<string>("BV074_streaming");
@@ -20,8 +22,6 @@ export const TextToSpeech: React.FC = () => {
     const [requestDelay, setRequestDelay] = useState(500);
     const [mergedAudioUrl, setMergedAudioUrl] = useState<string | null>(null);
     const [shouldProcess, setShouldProcess] = useState(false);
-    const [retryAttempt, setRetryAttempt] = useState(0);
-    const MAX_AUTO_RETRIES = 3;
     
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -33,97 +33,142 @@ export const TextToSpeech: React.FC = () => {
     
     useEffect(() => {
         const areAllJobsDone = totalChunksCount > 0 && chunks.every(c => c.status === 'finished' || c.status === 'error');
-        
-        if (processingState === 'idle' && areAllJobsDone && failedChunksCount > 0 && retryAttempt < MAX_AUTO_RETRIES) {
-            const timer = setTimeout(() => {
-                setRetryAttempt(prev => prev + 1);
-                retryAllFailed();
-            }, 1000); // 1s delay before auto-retry
-            return () => clearTimeout(timer);
-        }
-    }, [processingState, totalChunksCount, failedChunksCount, retryAttempt]);
-
-    useEffect(() => {
-        const areAllJobsDone = totalChunksCount > 0 && chunks.every(c => c.status === 'finished' || c.status === 'error');
         const hasFinishedChunks = chunks.some(c => c.status === 'finished');
 
         if (processingState === 'idle' && areAllJobsDone && hasFinishedChunks && failedChunksCount === 0) {
             const mergeAudio = async () => {
+                let audioContext: AudioContext | null = null;
                 try {
                     const finishedChunks = chunks.filter(c => c.status === 'finished' && c.audioUrl);
                     if (finishedChunks.length === 0) return;
 
-                    const hasTimestamps = finishedChunks.some(c => !!c.timestamp);
+                    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                    
+                    // Load and decode all audio chunks
+                    const audioBuffers = await Promise.all(
+                        finishedChunks.map(async chunk => {
+                            try {
+                                const response = await fetch(chunk.audioUrl!);
+                                const arrayBuffer = await response.arrayBuffer();
+                                const audioBuffer = await audioContext!.decodeAudioData(arrayBuffer);
+                                return {
+                                    buffer: audioBuffer,
+                                    startTime: chunk.startTime,
+                                };
+                            } catch (e) {
+                                console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
+                                throw e;
+                            }
+                        })
+                    );
 
-                    if (!hasTimestamps) {
-                        // Simple concatenation for plain text
+                    // Check if we should use timing-based merge
+                    const isTimedMerge = chunks.some(c => c.startTime !== undefined);
+
+                    if (isTimedMerge) {
+                        // Sort by startTime
+                        const sortedBuffers = [...audioBuffers].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+                        
+                        let currentTime = 0;
+                        const timedBuffers = sortedBuffers.map((item, index, arr) => {
+                                const nextItem = arr[index + 1];
+                                const originalDuration = item.buffer.duration;
+                                const idealStart = item.startTime || 0;
+                                
+                                // Dynamic Sync: Start at ideal time, or as soon as possible if delayed
+                                const actualStart = Math.max(idealStart, currentTime);
+                                
+                                let speed = 1.0;
+                                // Look ahead at next segments to determine if we need to catch up
+                                // If we have a next segment, try to finish before it starts
+                                if (nextItem && nextItem.startTime !== undefined) {
+                                    const nextIdealStart = nextItem.startTime;
+                                    const availableWindow = nextIdealStart - actualStart;
+                                    
+                                    // If we are already behind or the window is tight, calculate speed to finish on time
+                                    if (availableWindow <= 0) {
+                                        speed = 1.3; // Max speed if already behind
+                                    } else if (originalDuration > availableWindow) {
+                                        speed = Math.min(1.3, originalDuration / availableWindow);
+                                    }
+
+                                    // Check if this segment is so long it pushes the next one into the one after it
+                                    const itemAfterNext = arr[index + 2];
+                                    if (itemAfterNext && itemAfterNext.startTime !== undefined) {
+                                        const afterNextIdealStart = itemAfterNext.startTime;
+                                        // Estimate when we would finish the next segment if we both go at max speed
+                                        const estimatedNextStart = actualStart + (originalDuration / speed);
+                                        const nextSegmentDuration = nextItem.buffer.duration;
+                                        const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.3);
+                                        
+                                        // If even with the next segment at 1.3x we are still pushing the one after that,
+                                        // we MUST ensure this one is at least trying to help
+                                        if (estimatedAfterNextStart > afterNextIdealStart) {
+                                            // Increase speed further towards 1.3 if not already there
+                                            speed = Math.max(speed, Math.min(1.3, speed * 1.1));
+                                        }
+                                    }
+                                }
+
+                                // Ensure speed is a valid number and at least 1.0
+                                speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.3, speed));
+                                
+                                const effectiveDuration = originalDuration / speed;
+                                currentTime = actualStart + effectiveDuration;
+
+                                return {
+                                    ...item,
+                                    actualStartTime: actualStart,
+                                    playbackRate: speed
+                                };
+                            });
+
+                        const totalDuration = timedBuffers.length > 0 
+                            ? timedBuffers.reduce((max, item) => Math.max(max, item.actualStartTime + (item.buffer.duration / (item.playbackRate || 1.0))), 0)
+                            : 0;
+                        
+                        const safeTotalDuration = totalDuration + 0.1;
+
+                        // Use OfflineAudioContext for precise mixing
+                        const offlineCtx = new OfflineAudioContext(
+                            audioBuffers[0].buffer.numberOfChannels,
+                            Math.ceil(safeTotalDuration * audioBuffers[0].buffer.sampleRate),
+                            audioBuffers[0].buffer.sampleRate
+                        );
+
+                        timedBuffers.forEach(item => {
+                            const source = offlineCtx.createBufferSource();
+                            source.buffer = item.buffer;
+                            source.playbackRate.value = item.playbackRate || 1.0;
+                            source.connect(offlineCtx.destination);
+                            source.start(item.actualStartTime);
+                        });
+
+                        const renderedBuffer = await offlineCtx.startRendering();
+                        const wavBlob = audioBufferToWav(renderedBuffer);
+                        
+                        setMergedAudioUrl(prev => {
+                            if (prev) URL.revokeObjectURL(prev);
+                            return URL.createObjectURL(wavBlob);
+                        });
+                    } else {
+                        // Regular concatenation for non-SRT text
                         const blobs = await Promise.all(
                             finishedChunks.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
                         );
                         const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                        
                         setMergedAudioUrl(prev => {
                             if (prev) URL.revokeObjectURL(prev);
                             return URL.createObjectURL(mergedBlob);
                         });
-                        return;
                     }
-
-                    // Precise timing for SRT
-                    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                    const audioBuffers = await Promise.all(
-                        finishedChunks.map(async chunk => {
-                            const response = await fetch(chunk.audioUrl!);
-                            const arrayBuffer = await response.arrayBuffer();
-                            return await audioContext.decodeAudioData(arrayBuffer);
-                        })
-                    );
-
-                    const parseTimestamp = (ts: string): number => {
-                        try {
-                            const [time, ms] = ts.split(',');
-                            const [h, m, s] = time.split(':').map(Number);
-                            return h * 3600 + m * 60 + s + (parseInt(ms, 10) / 1000);
-                        } catch (e) {
-                            return 0;
-                        }
-                    };
-
-                    // Calculate total duration
-                    let totalDuration = 0;
-                    finishedChunks.forEach((chunk, i) => {
-                        const start = chunk.timestamp ? parseTimestamp(chunk.timestamp) : totalDuration;
-                        const end = start + audioBuffers[i].duration;
-                        if (end > totalDuration) totalDuration = end;
-                    });
-
-                    // Create offline context for rendering
-                    const offlineContext = new OfflineAudioContext(
-                        1, // mono is fine for TTS
-                        Math.ceil(totalDuration * 44100),
-                        44100
-                    );
-
-                    finishedChunks.forEach((chunk, i) => {
-                        const bufferSource = offlineContext.createBufferSource();
-                        bufferSource.buffer = audioBuffers[i];
-                        const startTime = chunk.timestamp ? parseTimestamp(chunk.timestamp) : 0; 
-                        bufferSource.connect(offlineContext.destination);
-                        bufferSource.start(startTime);
-                    });
-
-                    const renderedBuffer = await offlineContext.startRendering();
-                    
-                    // Convert AudioBuffer to Blob (as WAV since MP3 encoding is harder in browser without library)
-                    const wavBlob = audioBufferToWav(renderedBuffer);
-                    
-                    setMergedAudioUrl(prev => {
-                        if (prev) URL.revokeObjectURL(prev);
-                        return URL.createObjectURL(wavBlob);
-                    });
-                    
-                    await audioContext.close();
                 } catch (error) {
                     console.error("Gộp file âm thanh thất bại:", error);
+                } finally {
+                    if (audioContext) {
+                        await audioContext.close();
+                    }
                 }
             };
             mergeAudio();
@@ -133,58 +178,9 @@ export const TextToSpeech: React.FC = () => {
                 setMergedAudioUrl(null);
             }
         }
-    }, [processingState, totalChunksCount, failedChunksCount]);
+    }, [processingState, totalChunksCount, failedChunksCount, chunks]);
 
-    // Helper to convert AudioBuffer to WAV blob
-    const audioBufferToWav = (buffer: AudioBuffer): Blob => {
-        const numOfChan = buffer.numberOfChannels;
-        const length = buffer.length * numOfChan * 2 + 44;
-        const bufferArr = new ArrayBuffer(length);
-        const view = new DataView(bufferArr);
-        const channels = [];
-        let i;
-        let sample;
-        let offset = 0;
-        let pos = 0;
-
-        // Write WAV header
-        const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2; };
-        const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4; };
-
-        setUint32(0x46464952); // "RIFF"
-        setUint32(length - 8); // file length - 8
-        setUint32(0x45564157); // "WAVE"
-        setUint32(0x20746d66); // "fmt " chunk
-        setUint32(16); // length = 16
-        setUint16(1); // PCM (uncompressed)
-        setUint16(numOfChan);
-        setUint32(buffer.sampleRate);
-        setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
-        setUint16(numOfChan * 2); // block-align
-        setUint16(16); // 16-bit (hardcoded)
-        setUint32(0x61746164); // "data" - chunk
-        setUint32(length - pos - 4); // chunk length
-
-        // Write interleaved data
-        for (i = 0; i < buffer.numberOfChannels; i++) {
-            channels.push(buffer.getChannelData(i));
-        }
-
-        while (pos < length) {
-            for (i = 0; i < numOfChan; i++) {
-                sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
-                sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0; // scale to 16-bit signed int
-                view.setInt16(pos, sample, true);
-                pos += 2;
-            }
-            offset++;
-        }
-
-        return new Blob([bufferArr], { type: 'audio/wav' });
-    };
-
-    const addContent = useCallback((content: string | Array<{ text: string; timestamp: string }>) => {
-        setRetryAttempt(0); // Reset retries on new content
+    const addContent = useCallback((content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>) => {
         let newChunkJobs: ChunkJob[];
 
         if (typeof content === 'string') {
@@ -200,6 +196,8 @@ export const TextToSpeech: React.FC = () => {
                 id: uuidv4(),
                 text: chunk.text,
                 timestamp: chunk.timestamp,
+                startTime: chunk.startTime,
+                endTime: chunk.endTime,
                 status: 'pending',
             }));
         }
@@ -238,11 +236,6 @@ export const TextToSpeech: React.FC = () => {
     }, []);
 
     const processQueue = useCallback(async () => {
-        if (retryAttempt === 0) {
-            // Only reset if it's a new manual start, but since we reset on addContent,
-            // we check if it's the first time we start this set.
-        }
-        
         const token = keyManager.getKey('tts');
         
         if (!token) {
@@ -271,11 +264,13 @@ export const TextToSpeech: React.FC = () => {
                     speaker,
                     token,
                     appkey: APP_KEY,
-                });
+                }, signal);
                 if (!signal.aborted) {
                     updateChunk(chunk.id, { status: 'finished', audioUrl });
                 }
             } catch (err: any) {
+                if (signal.aborted || err.name === 'AbortError' || err.message === 'Aborted') return;
+                
                 if (err.message?.includes('token') || err.message?.includes('401') || err.message?.includes('429')) {
                     keyManager.markKeyAsBad(token);
                 }
@@ -330,13 +325,16 @@ export const TextToSpeech: React.FC = () => {
 
     const handleDownloadAll = useCallback(() => {
         if (!mergedAudioUrl) return;
+        const isTimedMerge = chunks.some(c => c.startTime !== undefined);
+        const fileName = isTimedMerge ? 'audio_timed_sync.wav' : 'audio_merged.mp3';
+        
         const a = document.createElement('a');
         a.href = mergedAudioUrl;
-        a.download = 'audio_merged.mp3';
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         a.remove();
-    }, [mergedAudioUrl]);
+    }, [mergedAudioUrl, chunks]);
     
     const handleCountryChange = useCallback((newCountry: string) => {
         setSelectedCountry(newCountry);
@@ -345,16 +343,6 @@ export const TextToSpeech: React.FC = () => {
             setSpeaker(newSpeakerGroup.speakers[0].id);
         }
     }, []);
-
-    const handleManualProcess = useCallback(() => {
-        setRetryAttempt(0);
-        processQueue();
-    }, [processQueue]);
-
-    const handleRetryAllFailed = useCallback(() => {
-        setRetryAttempt(0);
-        retryAllFailed();
-    }, [retryAllFailed]);
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
@@ -365,7 +353,7 @@ export const TextToSpeech: React.FC = () => {
                 onCountryChange={handleCountryChange}
                 speakerGroups={SPEAKER_GROUPS}
                 isProcessing={processingState === 'processing'}
-                onProcessQueue={handleManualProcess}
+                onProcessQueue={processQueue}
                 onAddContent={addContent}
                 pendingChunksCount={pendingChunksCount}
                 maxChars={maxChars}
@@ -386,7 +374,7 @@ export const TextToSpeech: React.FC = () => {
                 onClearQueue={clearQueue}
                 onDownloadAll={handleDownloadAll}
                 onRetryChunk={retryChunk}
-                onRetryAllFailed={handleRetryAllFailed}
+                onRetryAllFailed={retryAllFailed}
                 successfulChunksCount={successfulChunksCount}
                 failedChunksCount={failedChunksCount}
                 remainingChunksCount={remainingChunksCount}
