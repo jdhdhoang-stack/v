@@ -87,9 +87,9 @@ export const TextToSpeech: React.FC = () => {
                                     
                                     // If we are already behind or the window is tight, calculate speed to finish on time
                                     if (availableWindow <= 0) {
-                                        speed = 1.3; // Max speed if already behind
+                                        speed = 1.25; // Max speed if already behind
                                     } else if (originalDuration > availableWindow) {
-                                        speed = Math.min(1.3, originalDuration / availableWindow);
+                                        speed = Math.min(1.25, originalDuration / availableWindow);
                                     }
 
                                     // Check if this segment is so long it pushes the next one into the one after it
@@ -99,19 +99,19 @@ export const TextToSpeech: React.FC = () => {
                                         // Estimate when we would finish the next segment if we both go at max speed
                                         const estimatedNextStart = actualStart + (originalDuration / speed);
                                         const nextSegmentDuration = nextItem.buffer.duration;
-                                        const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.3);
+                                        const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.25);
                                         
-                                        // If even with the next segment at 1.3x we are still pushing the one after that,
+                                        // If even with the next segment at 1.25x we are still pushing the one after that,
                                         // we MUST ensure this one is at least trying to help
                                         if (estimatedAfterNextStart > afterNextIdealStart) {
-                                            // Increase speed further towards 1.3 if not already there
-                                            speed = Math.max(speed, Math.min(1.3, speed * 1.1));
+                                            // Increase speed further towards 1.25 if not already there
+                                            speed = Math.max(speed, Math.min(1.25, speed * 1.1));
                                         }
                                     }
                                 }
 
                                 // Ensure speed is a valid number and at least 1.0
-                                speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.3, speed));
+                                speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.25, speed));
                                 
                                 const effectiveDuration = originalDuration / speed;
                                 currentTime = actualStart + effectiveDuration;
