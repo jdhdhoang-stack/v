@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { audioBufferToWav } from '../src/lib/audioUtils';
 
-export const TextToSpeech: React.FC = () => {
+export const TextToSpeech: React.FC<{ onAudioMerged?: (url: string | null) => void }> = ({ onAudioMerged }) => {
     const [chunks, setChunks] = useState<ChunkJob[]>([]);
     const [speaker, setSpeaker] = useState<string>("BV074_streaming");
     const [selectedCountry, setSelectedCountry] = useState<string>(SPEAKER_GROUPS[0].country);
@@ -149,7 +149,9 @@ export const TextToSpeech: React.FC = () => {
                         
                         setMergedAudioUrl(prev => {
                             if (prev) URL.revokeObjectURL(prev);
-                            return URL.createObjectURL(wavBlob);
+                            const url = URL.createObjectURL(wavBlob);
+                            onAudioMerged?.(url);
+                            return url;
                         });
                     } else {
                         // Regular concatenation for non-SRT text
@@ -160,7 +162,9 @@ export const TextToSpeech: React.FC = () => {
                         
                         setMergedAudioUrl(prev => {
                             if (prev) URL.revokeObjectURL(prev);
-                            return URL.createObjectURL(mergedBlob);
+                            const url = URL.createObjectURL(mergedBlob);
+                            onAudioMerged?.(url);
+                            return url;
                         });
                     }
                 } catch (error) {
@@ -176,6 +180,7 @@ export const TextToSpeech: React.FC = () => {
             if (mergedAudioUrl) {
                 URL.revokeObjectURL(mergedAudioUrl);
                 setMergedAudioUrl(null);
+                onAudioMerged?.(null);
             }
         }
     }, [processingState, totalChunksCount, failedChunksCount, chunks]);

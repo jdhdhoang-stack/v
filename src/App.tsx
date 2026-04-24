@@ -4,6 +4,7 @@ import { Logo } from '../components/Logo';
 import { Settings } from '../components/Settings';
 import { TextToSpeech } from '../components/TextToSpeech';
 import { TextFilter } from '../components/TextFilter';
+import { VideoMerger } from '../components/VideoMerger';
 
 const TabButton: React.FC<{ 
     name: string; 
@@ -27,7 +28,8 @@ const TabButton: React.FC<{
 };
 
 const App: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings'>('tts');
+    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video'>('tts');
+    const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
     
     return (
         <div className="min-h-screen flex flex-col bg-[#0A0A0A]">
@@ -47,10 +49,16 @@ const App: React.FC = () => {
                             icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>}
                         />
                         <TabButton 
-                            name="Lọc văn bản" 
+                            name="Lọc" 
                             active={activeTab === 'filter'} 
                             onClick={() => setActiveTab('filter')} 
                             icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>}
+                        />
+                        <TabButton 
+                            name="Video" 
+                            active={activeTab === 'video'} 
+                            onClick={() => setActiveTab('video')} 
+                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2-2 0 00-2 2v12a2 2 0 002 2z"></path></svg>}
                         />
                         <div className="w-px h-6 bg-[#262626] mx-2"></div>
                         <TabButton 
@@ -64,8 +72,31 @@ const App: React.FC = () => {
             </header>
 
             <main className="flex-grow container mx-auto p-6 md:p-10">
-                 {activeTab === 'tts' && <TextToSpeech />}
+                 {activeTab === 'tts' && <TextToSpeech onAudioMerged={setSharedAudioUrl} />}
                  {activeTab === 'filter' && <TextFilter />}
+                 {activeTab === 'video' && (
+                     <div className="h-full">
+                         {sharedAudioUrl ? (
+                             <VideoMerger audioUrl={sharedAudioUrl} />
+                         ) : (
+                             <div className="flex flex-col items-center justify-center p-20 bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
+                                 <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
+                                     <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                 </div>
+                                 <div className="space-y-2">
+                                     <h2 className="text-xl font-bold text-white">Chưa có Audio</h2>
+                                     <p className="text-gray-500 max-w-sm mx-auto text-sm">Vui lòng quay lại tab "Tổng hợp" để tạo file âm thanh trước khi sản xuất video.</p>
+                                 </div>
+                                 <button 
+                                    onClick={() => setActiveTab('tts')}
+                                    className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20"
+                                 >
+                                     Tới Tab Tổng hợp
+                                 </button>
+                             </div>
+                         )}
+                     </div>
+                 )}
                  {activeTab === 'settings' && <Settings />}
             </main>
 

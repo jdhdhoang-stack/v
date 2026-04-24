@@ -2,8 +2,7 @@
 import React, { useState } from 'react';
 import type { ChunkJob, ProcessingState } from '../src/types';
 import { ChunkCard } from './ChunkCard';
-import { Video, Film, Download, Trash2, XCircle, Layers, RefreshCcw } from 'lucide-react';
-import { VideoMerger } from './VideoMerger';
+import { Download, Trash2, Layers, RefreshCcw } from 'lucide-react';
 
 interface ResultsPanelProps {
     chunks: ChunkJob[];
@@ -25,8 +24,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
     chunks, processingState, mergedAudioUrl, onCancel, removeChunk, onClearQueue, onDownloadAll,
     onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount
 }) => {
-    const [showMerger, setShowMerger] = useState(false);
-    
     return (
         <div className="bg-[#121212] border border-[#262626] rounded-xl shadow-sm h-full flex flex-col overflow-hidden text-gray-200">
              <div className="p-6 border-b border-[#262626] bg-[#0d0d0d]">
@@ -95,7 +92,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                             Trình duyệt không hỗ trợ.
                         </audio>
                         
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3">
                             <button
                                 onClick={onDownloadAll}
                                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all active:scale-[0.97] uppercase tracking-widest"
@@ -103,20 +100,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                                 <Download size={16} />
                                 Tải xuống MP3
                             </button>
-                            <button
-                                onClick={() => setShowMerger(true)}
-                                className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#1A1A1A] border border-[#262626] hover:bg-[#262626] transition-all active:scale-[0.97] uppercase tracking-widest"
-                            >
-                                <Film size={16} />
-                                Sản xuất Video
-                            </button>
                         </div>
                     </div>
                 </div>
-            )}
-
-            {showMerger && mergedAudioUrl && (
-                <VideoMerger audioUrl={mergedAudioUrl} onClose={() => setShowMerger(false)} />
             )}
 
              <div className="flex-grow overflow-y-auto p-6 pt-0 space-y-3">

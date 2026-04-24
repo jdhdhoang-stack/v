@@ -4,7 +4,7 @@ import { Video, Image as ImageIcon, Download, Loader2, X, Play, Pause, Film } fr
 
 interface VideoMergerProps {
     audioUrl: string;
-    onClose: () => void;
+    onClose?: () => void;
 }
 
 export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) => {
@@ -16,6 +16,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) =
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioRef = useRef<HTMLAudioElement>(null);
+    const bgImageRef = useRef<HTMLImageElement | null>(null);
     const requestRef = useRef<number>();
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -24,7 +25,11 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) =
         
         if (file.type.startsWith('image/')) {
             setBgType('image');
-            setBgSource(URL.createObjectURL(file));
+            const url = URL.createObjectURL(file);
+            setBgSource(url);
+            const img = new Image();
+            img.src = url;
+            bgImageRef.current = img;
         } else if (file.type.startsWith('video/')) {
             setBgType('video');
             setBgSource(URL.createObjectURL(file));
@@ -41,10 +46,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) =
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // Draw Background
-        if (bgType === 'image' && bgSource) {
-            const img = new Image();
-            img.src = bgSource;
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        if (bgType === 'image' && bgImageRef.current) {
+            ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
         } else if (bgType === 'video' && videoRef.current && bgSource) {
             ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
         }
@@ -137,8 +140,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) =
     }, [bgSource, bgType]);
 
     return (
-        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-[#121212] border border-[#262626] rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+        <div className={onClose ? "fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4" : "w-full"}>
+            <div className={`bg-[#121212] border border-[#262626] rounded-3xl w-full max-w-4xl overflow-hidden flex flex-col shadow-2xl mx-auto ${onClose ? "max-h-[90vh]" : ""}`}>
                 <div className="p-6 border-b border-[#262626] flex justify-between items-center bg-[#0d0d0d]">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-blue-900/30 rounded-lg border border-blue-900/20">
@@ -149,9 +152,11 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, onClose }) =
                             <p className="text-xs text-gray-500 uppercase font-bold tracking-widest">Gộp Audio & Hình ảnh/Video nền</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-[#262626] rounded-full transition-colors text-gray-400">
-                        <X size={20} />
-                    </button>
+                    {onClose && (
+                        <button onClick={onClose} className="p-2 hover:bg-[#262626] rounded-full transition-colors text-gray-400">
+                            <X size={20} />
+                        </button>
+                    )}
                 </div>
 
                 <div className="flex-grow overflow-y-auto p-8 grid grid-cols-1 lg:grid-cols-2 gap-10">
