@@ -5,9 +5,8 @@ class AIService {
     private ai: GoogleGenAI;
 
     constructor() {
-        // The API key is provided by the environment
         const apiKey = process.env.GEMINI_API_KEY || "";
-        this.ai = new GoogleGenAI({ apiKey });
+        this.ai = new GoogleGenAI(apiKey);
     }
 
     public async optimizeTextForTTS(text: string): Promise<string> {
@@ -30,11 +29,10 @@ class AIService {
         `;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: "gemini-3-flash-preview",
-                contents: prompt
-            });
-            return (response.text || "").trim();
+            const model = this.ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            return response.text().trim();
         } catch (error) {
             console.error("AI Optimization failed:", error);
             throw error;
@@ -62,11 +60,10 @@ class AIService {
         `;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: "gemini-3-flash-preview",
-                contents: prompt
-            });
-            return (response.text || "").trim();
+            const model = this.ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            return response.text().trim();
         } catch (error) {
             console.error("AI Script Generation failed:", error);
             throw error;
@@ -88,29 +85,29 @@ class AIService {
         `;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: "gemini-3-flash-preview",
-                contents: prompt
-            });
-            return (response.text || "").trim();
+            const model = this.ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            return response.text().trim();
         } catch (error) {
             console.error("AI Translation failed:", error);
             throw error;
         }
     }
 
-    public async chat(message: string, history: { role: 'user' | 'model', parts: { text: string }[] }[]): Promise<string> {
+    public async chat(message: string, history: any[]): Promise<string> {
         if (!process.env.GEMINI_API_KEY) {
             throw new Error("Gemini API key is not configured.");
         }
 
         try {
-            const contents = [...history, { role: 'user', parts: [{ text: message }] }];
-            const response = await this.ai.models.generateContent({
-                model: "gemini-1.5-flash-8b",
-                contents: contents
+            const model = this.ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const chat = model.startChat({
+                history: history,
             });
-            return (response.text || "").trim();
+            const result = await chat.sendMessage(message);
+            const response = await result.response;
+            return response.text().trim();
         } catch (error) {
             console.error("AI Chat failed:", error);
             throw error;
