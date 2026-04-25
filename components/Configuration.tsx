@@ -2,9 +2,8 @@
 import React, { useState, memo } from 'react';
 import type { SpeakerGroup } from '../src/types';
 import { FileUpload } from './FileUpload';
-import { Settings2, Wand2, Sparkles, Loader2, BrainCircuit, X, MessageSquarePlus } from 'lucide-react';
+import { Settings2, Wand2, Sparkles, Loader2 } from 'lucide-react';
 import { aiService } from '../services/aiService';
-import { motion, AnimatePresence } from 'motion/react';
 
 interface ConfigurationProps {
     speaker: string;
@@ -35,10 +34,6 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
     const [textToAdd, setTextToAdd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [isOptimizing, setIsOptimizing] = useState(false);
-    const [showAiModal, setShowAiModal] = useState(false);
-    const [aiTopic, setAiTopic] = useState('');
-    const [aiLength, setAiLength] = useState<'short' | 'medium' | 'long'>('medium');
-    const [isGenerating, setIsGenerating] = useState(false);
 
     const handleAddTextJob = () => {
         if (!textToAdd.trim()) return;
@@ -53,24 +48,9 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
             const optimized = await aiService.optimizeTextForTTS(textToAdd);
             setTextToAdd(optimized);
         } catch (error) {
-            alert("Tối ưu hóa AI thất bại. Vui lòng kiểm tra cấu hình Gemini.");
+            alert("Tối ưu hóa AI thất bại. Vui lòng kiểm tra API Key.");
         } finally {
             setIsOptimizing(false);
-        }
-    };
-
-    const handleGenerateScript = async () => {
-        if (!aiTopic.trim() || isGenerating) return;
-        setIsGenerating(true);
-        try {
-            const script = await aiService.generateScript(aiTopic, aiLength);
-            setTextToAdd(script);
-            setShowAiModal(false);
-            setAiTopic('');
-        } catch (error) {
-            alert("Tạo kịch bản AI thất bại. Vui lòng thử lại.");
-        } finally {
-            setIsGenerating(false);
         }
     };
 
@@ -189,17 +169,6 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                 </div>
 
                 <div className="space-y-4 pt-4 border-t border-[#262626]">
-                    <div className="flex justify-between items-center px-1">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest">Nội dung văn bản</label>
-                        <button
-                            onClick={() => setShowAiModal(true)}
-                            className="flex items-center gap-2 text-[10px] font-bold text-purple-400 hover:text-purple-300 transition-colors bg-purple-900/10 px-2.5 py-1 rounded-full border border-purple-900/20"
-                        >
-                            <BrainCircuit size={12} />
-                            Trợ lý Kịch bản AI
-                        </button>
-                    </div>
-
                     <div className="bg-[#1A1A1A] border border-[#262626] rounded-xl overflow-hidden focus-within:border-blue-500/50 transition-all relative">
                         <textarea
                             value={textToAdd}
@@ -242,90 +211,6 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                     {isProcessing ? 'Đang xử lý...' : `Bắt đầu Tổng hợp (${pendingChunksCount})`}
                 </button>
             </div>
-
-            {/* AI Modal */}
-            <AnimatePresence>
-                {showAiModal && (
-                    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowAiModal(false)}
-                            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-                        />
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                            className="relative w-full max-w-lg bg-[#121212] border border-[#262626] rounded-3xl overflow-hidden shadow-2xl"
-                        >
-                            <div className="p-6 border-b border-[#262626] flex justify-between items-center bg-[#181818]">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-purple-900/30 rounded-lg border border-purple-900/20">
-                                        <BrainCircuit size={20} className="text-purple-400" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-lg font-bold text-white leading-none">Trợ lý Kịch bản AI</h3>
-                                        <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest mt-1">Powered by Gemini 3 Flash</p>
-                                    </div>
-                                </div>
-                                <button
-                                    onClick={() => setShowAiModal(false)}
-                                    className="p-2 hover:bg-[#262626] rounded-full text-gray-500 transition-colors"
-                                >
-                                    <X size={20} />
-                                </button>
-                            </div>
-
-                            <div className="p-6 space-y-6">
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Bạn muốn viết về chủ đề gì?</label>
-                                    <textarea
-                                        value={aiTopic}
-                                        onChange={(e) => setAiTopic(e.target.value)}
-                                        placeholder="Ví dụ: Giới thiệu về lợi ích của việc đọc sách mỗi ngày, hay hướng dẫn nấu món phở gà..."
-                                        rows={3}
-                                        className="w-full bg-[#1A1A1A] border border-[#262626] rounded-xl p-3 text-sm text-gray-200 focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none transition-all resize-none"
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Độ dài kịch bản</label>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {(['short', 'medium', 'long'] as const).map((l) => (
-                                            <button
-                                                key={l}
-                                                onClick={() => setAiLength(l)}
-                                                className={`py-2 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${
-                                                    aiLength === l 
-                                                    ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-900/20' 
-                                                    : 'bg-[#1A1A1A] border-[#262626] text-gray-500 hover:border-purple-500/50 hover:text-gray-300'
-                                                }`}
-                                            >
-                                                {l === 'short' ? 'Ngắn' : l === 'medium' ? 'Vừa' : 'Dài'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={handleGenerateScript}
-                                    disabled={isGenerating || !aiTopic.trim()}
-                                    className="w-full py-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold uppercase tracking-widest text-xs flex items-center justify-center gap-3 transition-all disabled:opacity-20 shadow-xl shadow-purple-900/20 active:scale-[0.98]"
-                                >
-                                    {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <MessageSquarePlus size={16} />}
-                                    {isGenerating ? 'Đang sáng tạo nội dung...' : 'Bắt đầu tạo kịch bản'}
-                                </button>
-                                
-                                <p className="text-[9px] text-center text-gray-600 leading-relaxed px-4">
-                                    AI sẽ tạo ra một kịch bản hoàn chỉnh dựa trên chủ đề của bạn. Bạn có thể chỉnh sửa lại trước khi đưa vào hàng chờ tổng hợp.
-                                </p>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
         </div>
     );
 });

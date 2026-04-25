@@ -2,7 +2,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Video, Image as ImageIcon, Download, Loader2, X, Play, Pause, Film, Settings, Maximize2, Type } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useAuth } from '../src/contexts/AuthContext';
 
 interface BlurConfig {
     enabled: boolean;
@@ -33,7 +32,6 @@ const STORAGE_KEY_BLUR = 'vocalis_blur_config';
 const STORAGE_KEY_SUBTITLE = 'vocalis_subtitle_config';
 
 export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, chunks, onClose }) => {
-    const { user, userSettings, saveSettings } = useAuth();
     const [bgType, setBgType] = useState<'image' | 'video' | 'color'>('color');
     const [bgSource, setBgSource] = useState<string | null>(null);
     const [isRendering, setIsRendering] = useState(false);
@@ -41,23 +39,16 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, chunks, onCl
     const [showSettings, setShowSettings] = useState(false);
     
     // Blur Settings
-    const [blurConfig, setBlurConfig] = useState<BlurConfig>({ enabled: false, x: 10, y: 10, width: 20, height: 10, amount: 15 });
+    const [blurConfig, setBlurConfig] = useState<BlurConfig>(() => {
+        const saved = localStorage.getItem(STORAGE_KEY_BLUR);
+        return saved ? JSON.parse(saved) : { enabled: false, x: 10, y: 10, width: 20, height: 10, amount: 15 };
+    });
 
     // Subtitle Settings
-    const [subtitleConfig, setSubtitleConfig] = useState<SubtitleConfig>({ fontSize: 48, bottomMargin: 100, color: '#ffffff', shadow: true, enabled: true });
-
-    useEffect(() => {
-        // Load settings from Firebase if available, otherwise localStorage
-        if (userSettings) {
-            if (userSettings.blurConfig) setBlurConfig(userSettings.blurConfig);
-            if (userSettings.subtitleConfig) setSubtitleConfig(userSettings.subtitleConfig);
-        } else {
-            const savedBlur = localStorage.getItem(STORAGE_KEY_BLUR);
-            const savedSubs = localStorage.getItem(STORAGE_KEY_SUBTITLE);
-            if (savedBlur) setBlurConfig(JSON.parse(savedBlur));
-            if (savedSubs) setSubtitleConfig(JSON.parse(savedSubs));
-        }
-    }, [userSettings]);
+    const [subtitleConfig, setSubtitleConfig] = useState<SubtitleConfig>(() => {
+        const saved = localStorage.getItem(STORAGE_KEY_SUBTITLE);
+        return saved ? JSON.parse(saved) : { fontSize: 48, bottomMargin: 100, color: '#ffffff', shadow: true, enabled: true };
+    });
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -65,14 +56,13 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, chunks, onCl
     const bgImageRef = useRef<HTMLImageElement | null>(null);
     const requestRef = useRef<number>();
 
-    const persistSettings = async () => {
-        if (user) {
-            await saveSettings({ blurConfig, subtitleConfig });
-        } else {
-            localStorage.setItem(STORAGE_KEY_BLUR, JSON.stringify(blurConfig));
-            localStorage.setItem(STORAGE_KEY_SUBTITLE, JSON.stringify(subtitleConfig));
-        }
-    };
+    useEffect(() => {
+        localStorage.setItem(STORAGE_KEY_BLUR, JSON.stringify(blurConfig));
+    }, [blurConfig]);
+
+    useEffect(() => {
+        localStorage.setItem(STORAGE_KEY_SUBTITLE, JSON.stringify(subtitleConfig));
+    }, [subtitleConfig]);
 
     useEffect(() => {
         if (bgType === 'video' && bgSource && videoRef.current) {
@@ -600,10 +590,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({ audioUrl, chunks, onCl
                                         </div>
 
                                         <button 
-                                            onClick={() => {
-                                                persistSettings();
-                                                setShowSettings(false);
-                                            }}
+                                            onClick={() => setShowSettings(false)}
                                             className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20"
                                         >
                                             Lưu thay đổi & Quay lại
