@@ -132,8 +132,12 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
                            const audioBlob = await response.blob();
                            const audioUrl = URL.createObjectURL(audioBlob);
                            settle(resolve, audioUrl);
-                       } catch(err) {
-                           settle(reject, err);
+                       } catch(err: any) {
+                           if (err.name === 'AbortError' || signal?.aborted) {
+                               settle(reject, new Error('Aborted'));
+                           } else {
+                               settle(reject, err);
+                           }
                        }
                        return;
                     }

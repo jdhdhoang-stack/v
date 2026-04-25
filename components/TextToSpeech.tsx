@@ -154,12 +154,12 @@ export const TextToSpeech: React.FC<{
                         const renderedBuffer = await offlineCtx.startRendering();
                         const wavBlob = audioBufferToWav(renderedBuffer);
                         
+                        const url = URL.createObjectURL(wavBlob);
                         setMergedAudioUrl(prev => {
                             if (prev) URL.revokeObjectURL(prev);
-                            const url = URL.createObjectURL(wavBlob);
-                            onAudioMerged?.(url);
                             return url;
                         });
+                        onAudioMerged?.(url);
                     } else {
                         // Regular concatenation for non-SRT text
                         const blobs = await Promise.all(
@@ -167,12 +167,12 @@ export const TextToSpeech: React.FC<{
                         );
                         const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
                         
+                        const url = URL.createObjectURL(mergedBlob);
                         setMergedAudioUrl(prev => {
                             if (prev) URL.revokeObjectURL(prev);
-                            const url = URL.createObjectURL(mergedBlob);
-                            onAudioMerged?.(url);
                             return url;
                         });
+                        onAudioMerged?.(url);
                     }
                 } catch (error) {
                     console.error("Gộp file âm thanh thất bại:", error);

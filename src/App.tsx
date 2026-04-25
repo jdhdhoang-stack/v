@@ -33,6 +33,8 @@ const App: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video'>('tts');
     const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
     const [sharedChunks, setSharedChunks] = useState<ChunkJob[]>([]);
+    const [sharedBgType, setSharedBgType] = useState<'image' | 'video' | 'color'>('color');
+    const [sharedBgSource, setSharedBgSource] = useState<string | null>(null);
     
     return (
         <div className="min-h-screen flex flex-col bg-[#0A0A0A]">
@@ -80,7 +82,20 @@ const App: React.FC = () => {
                  {activeTab === 'video' && (
                      <div className="h-full">
                          {sharedAudioUrl ? (
-                             <VideoMerger audioUrl={sharedAudioUrl} chunks={sharedChunks} />
+                             <VideoMerger 
+                                audioUrl={sharedAudioUrl} 
+                                chunks={sharedChunks} 
+                                initialBgType={sharedBgType}
+                                initialBgSource={sharedBgSource}
+                                onBgChange={(type, source) => {
+                                    setSharedBgType(type);
+                                    setSharedBgSource(source);
+                                }}
+                                onAudioChange={(url, chunks) => {
+                                    setSharedAudioUrl(url);
+                                    setSharedChunks(chunks);
+                                }}
+                             />
                          ) : (
                              <div className="flex flex-col items-center justify-center p-20 bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
                                  <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
@@ -88,14 +103,27 @@ const App: React.FC = () => {
                                  </div>
                                  <div className="space-y-2">
                                      <h2 className="text-xl font-bold text-white">Chưa có Audio</h2>
-                                     <p className="text-gray-500 max-w-sm mx-auto text-sm">Vui lòng quay lại tab "Tổng hợp" để tạo file âm thanh trước khi sản xuất video.</p>
+                                     <p className="text-gray-500 max-w-sm mx-auto text-sm">Vui lòng quay lại tab "Tổng hợp" để tạo file âm thanh hoặc tải lên một file âm thanh từ thiết bị của bạn trước khi sản xuất video.</p>
                                  </div>
-                                 <button 
-                                    onClick={() => setActiveTab('tts')}
-                                    className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20"
-                                 >
-                                     Tới Tab Tổng hợp
-                                 </button>
+                                 <div className="flex flex-col sm:flex-row gap-4">
+                                     <button 
+                                        onClick={() => setActiveTab('tts')}
+                                        className="px-8 py-3 bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-600/30 transition-all active:scale-95"
+                                     >
+                                         Tới Tab Tổng hợp
+                                     </button>
+                                     <label className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20 cursor-pointer text-center">
+                                         Tải Audio lên
+                                         <input type="file" accept="audio/*" className="hidden" onChange={(e) => {
+                                             const file = e.target.files?.[0];
+                                             if (file) {
+                                                const url = URL.createObjectURL(file);
+                                                setSharedAudioUrl(url);
+                                                setSharedChunks([]);
+                                             }
+                                         }} />
+                                     </label>
+                                 </div>
                              </div>
                          )}
                      </div>
