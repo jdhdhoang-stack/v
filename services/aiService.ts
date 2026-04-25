@@ -1,15 +1,13 @@
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 class AIService {
-    private genAI: GoogleGenerativeAI;
-    private model: any;
+    private ai: GoogleGenAI;
 
     constructor() {
         // The API key is provided by the environment
         const apiKey = process.env.GEMINI_API_KEY || "";
-        this.genAI = new GoogleGenerativeAI(apiKey);
-        this.model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        this.ai = new GoogleGenAI({ apiKey });
     }
 
     public async optimizeTextForTTS(text: string): Promise<string> {
@@ -32,11 +30,89 @@ class AIService {
         `;
 
         try {
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            return response.text().trim();
+            const response = await this.ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: prompt
+            });
+            return (response.text || "").trim();
         } catch (error) {
             console.error("AI Optimization failed:", error);
+            throw error;
+        }
+    }
+
+    public async generateScript(topic: string, length: 'short' | 'medium' | 'long' = 'medium'): Promise<string> {
+        if (!process.env.GEMINI_API_KEY) {
+            throw new Error("Gemini API key is not configured.");
+        }
+
+        const lengthDesc = {
+            'short': 'khoảng 100-200 từ',
+            'medium': 'khoảng 300-500 từ',
+            'long': 'khoảng 800-1000 từ'
+        };
+
+        const prompt = `
+            Hãy viết một kịch bản audio (script) về chủ đề: "${topic}".
+            Độ dài yêu cầu: ${lengthDesc[length]}.
+            Ngôn ngữ: Tiếng Việt.
+            Phong cách: Tự nhiên, lôi cuốn, phù hợp để đọc bằng công cụ Text-to-Speech.
+            Cấu trúc: Có mở đầu, nội dung chính và kết thúc rõ ràng.
+            Lưu ý: Chỉ trả về nội dung kịch bản, không kèm theo bất kỳ lời dẫn nhập hay kết luận nào từ phía AI.
+        `;
+
+        try {
+            const response = await this.ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: prompt
+            });
+            return (response.text || "").trim();
+        } catch (error) {
+            console.error("AI Script Generation failed:", error);
+            throw error;
+        }
+    }
+
+    public async translateText(text: string, targetLang: string): Promise<string> {
+        if (!process.env.GEMINI_API_KEY) {
+            throw new Error("Gemini API key is not configured.");
+        }
+
+        const prompt = `
+            Hãy dịch văn bản sau đây sang ${targetLang}. 
+            Yêu cầu: Dịch sát nghĩa, văn phong tự nhiên, giữ nguyên các định dạng nếu có.
+            Chỉ trả về bản dịch, không thêm lời dẫn.
+
+            Văn bản:
+            "${text}"
+        `;
+
+        try {
+            const response = await this.ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: prompt
+            });
+            return (response.text || "").trim();
+        } catch (error) {
+            console.error("AI Translation failed:", error);
+            throw error;
+        }
+    }
+
+    public async chat(message: string, history: { role: 'user' | 'model', parts: { text: string }[] }[]): Promise<string> {
+        if (!process.env.GEMINI_API_KEY) {
+            throw new Error("Gemini API key is not configured.");
+        }
+
+        try {
+            const contents = [...history, { role: 'user', parts: [{ text: message }] }];
+            const response = await this.ai.models.generateContent({
+                model: "gemini-1.5-flash-8b",
+                contents: contents
+            });
+            return (response.text || "").trim();
+        } catch (error) {
+            console.error("AI Chat failed:", error);
             throw error;
         }
     }

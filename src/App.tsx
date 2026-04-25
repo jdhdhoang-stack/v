@@ -5,6 +5,10 @@ import { Settings } from '../components/Settings';
 import { TextToSpeech } from '../components/TextToSpeech';
 import { TextFilter } from '../components/TextFilter';
 import { VideoMerger } from '../components/VideoMerger';
+import { GeminiTab } from '../components/GeminiTab';
+import { useAuth } from './contexts/AuthContext';
+import { LogIn, LogOut, User as UserIcon, BrainCircuit, Mic2, Filter, Video, Settings as SettingsIcon } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const TabButton: React.FC<{ 
     name: string; 
@@ -15,73 +19,157 @@ const TabButton: React.FC<{
     return (
         <button
             onClick={onClick}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all rounded-lg ${
+            className={`flex items-center gap-2 px-6 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all rounded-xl relative group ${
                 active 
-                ? 'bg-blue-600 text-white shadow-sm' 
-                : 'text-gray-400 hover:bg-[#1A1A1A] hover:text-gray-200'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20 active:scale-95' 
+                : 'text-gray-500 hover:bg-[#1A1A1A] hover:text-gray-200'
             }`}
         >
-            <span className={active ? 'text-white' : 'text-gray-500'}>{icon}</span>
+            <span className={active ? 'text-white' : 'text-gray-500 group-hover:text-blue-400'}>{icon}</span>
             <span>{name}</span>
+            {active && (
+                <motion.div 
+                    layoutId="tab-underline"
+                    className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-6 h-1 bg-blue-300 rounded-full"
+                />
+            )}
         </button>
     );
 };
 
+import { ChunkJob } from './types';
+
 const App: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video'>('tts');
+    const { user, login, logout, loading } = useAuth();
+    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video' | 'gemini'>('tts');
     const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
+    const [sharedChunks, setSharedChunks] = useState<ChunkJob[]>([]);
+    const [showUserMenu, setShowUserMenu] = useState(false);
     
     return (
         <div className="min-h-screen flex flex-col bg-[#0A0A0A]">
-            <header className="bg-[#0D0D0D] border-b border-[#262626] sticky top-0 z-50">
-                <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <Logo className="h-8 w-8 text-blue-500" />
-                        <h1 className="text-xl font-bold tracking-tight text-white">Vocalis</h1>
-                        <span className="hidden sm:inline-block px-2 py-0.5 bg-[#1A1A1A] text-gray-400 text-[10px] font-bold rounded uppercase tracking-wider">Pro Suite</span>
+            <header className="bg-[#0D0D0D]/80 backdrop-blur-xl border-b border-[#1A1A1A] sticky top-0 z-50">
+                <div className="container mx-auto px-6 h-20 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20">
+                            <span className="text-white font-black text-xl italic tracking-tighter">V</span>
+                        </div>
+                        <div className="hidden lg:block">
+                            <h1 className="text-xl font-black tracking-tighter text-white leading-none uppercase">Vocalis</h1>
+                            <p className="text-[9px] font-black text-blue-500 uppercase tracking-[0.2em] mt-1">AI Audio Platform</p>
+                        </div>
                     </div>
 
-                    <nav className="flex items-center gap-1">
-                        <TabButton 
-                            name="Tổng hợp" 
-                            active={activeTab === 'tts'} 
-                            onClick={() => setActiveTab('tts')} 
-                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>}
-                        />
-                        <TabButton 
-                            name="Lọc" 
-                            active={activeTab === 'filter'} 
-                            onClick={() => setActiveTab('filter')} 
-                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>}
-                        />
-                        <TabButton 
-                            name="Video" 
-                            active={activeTab === 'video'} 
-                            onClick={() => setActiveTab('video')} 
-                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2-2 0 00-2 2v12a2 2 0 002 2z"></path></svg>}
-                        />
-                        <div className="w-px h-6 bg-[#262626] mx-2"></div>
-                        <TabButton 
-                            name="Cài đặt" 
-                            active={activeTab === 'settings'} 
-                            onClick={() => setActiveTab('settings')} 
-                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>}
-                        />
-                    </nav>
+                    <div className="flex items-center gap-4">
+                        <nav className="flex items-center gap-1.5 p-1 bg-[#121212] rounded-2xl border border-[#262626]">
+                            <TabButton 
+                                name="Dịch & AI" 
+                                active={activeTab === 'gemini'} 
+                                onClick={() => setActiveTab('gemini')} 
+                                icon={<BrainCircuit size={14} />}
+                            />
+                            <TabButton 
+                                name="Tổng hợp" 
+                                active={activeTab === 'tts'} 
+                                onClick={() => setActiveTab('tts')} 
+                                icon={<Mic2 size={14} />}
+                            />
+                            <TabButton 
+                                name="Lọc văn bản" 
+                                active={activeTab === 'filter'} 
+                                onClick={() => setActiveTab('filter')} 
+                                icon={<Filter size={14} />}
+                            />
+                            <TabButton 
+                                name="Dựng Video" 
+                                active={activeTab === 'video'} 
+                                onClick={() => setActiveTab('video')} 
+                                icon={<Video size={14} />}
+                            />
+                            <div className="w-px h-6 bg-[#262626] mx-1"></div>
+                            <TabButton 
+                                name="Cài đặt" 
+                                active={activeTab === 'settings'} 
+                                onClick={() => setActiveTab('settings')} 
+                                icon={<SettingsIcon size={14} />}
+                            />
+                        </nav>
+
+                        <div className="relative ml-2">
+                            {user ? (
+                                <button 
+                                    onClick={() => setShowUserMenu(!showUserMenu)}
+                                    className="flex items-center gap-3 p-1.5 pl-4 bg-[#1A1A1A] border border-[#262626] rounded-full hover:border-blue-500/30 transition-all shadow-lg"
+                                >
+                                    <div className="text-right hidden sm:block">
+                                        <p className="text-[10px] font-black text-white leading-none capitalize">{user.displayName || 'Người dùng'}</p>
+                                        <p className="text-[8px] font-bold text-gray-500 mt-1">Tài khoản Google</p>
+                                    </div>
+                                    {user.photoURL ? (
+                                        <img src={user.photoURL} alt="Avatar" className="w-9 h-9 rounded-full border-2 border-blue-600/30 object-cover" referrerPolicy="no-referrer" />
+                                    ) : (
+                                        <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center border-2 border-blue-500/30">
+                                            <UserIcon size={16} className="text-white" />
+                                        </div>
+                                    )}
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={login}
+                                    disabled={loading}
+                                    className="px-6 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all active:scale-95 disabled:opacity-50 shadow-xl shadow-white/5"
+                                >
+                                    Đăng nhập Google
+                                </button>
+                            )}
+
+                            <AnimatePresence>
+                                {showUserMenu && user && (
+                                    <>
+                                        <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                                        <motion.div 
+                                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                            className="absolute right-0 mt-4 w-56 bg-[#181818] border border-[#262626] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden z-50 origin-top-right backdrop-blur-xl"
+                                        >
+                                            <div className="p-5 border-b border-[#262626] bg-gradient-to-br from-[#1A1A1A] to-[#121212]">
+                                                <p className="text-xs font-black text-white truncate">{user.displayName}</p>
+                                                <p className="text-[10px] text-gray-500 truncate mt-1">{user.email}</p>
+                                            </div>
+                                            <div className="p-2">
+                                                <button 
+                                                    onClick={() => {
+                                                        logout();
+                                                        setShowUserMenu(false);
+                                                    }}
+                                                    className="w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:bg-red-400/5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all"
+                                                >
+                                                    <LogOut size={16} />
+                                                    Đăng xuất
+                                                </button>
+                                            </div>
+                                        </motion.div>
+                                    </>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                    </div>
                 </div>
             </header>
 
             <main className="flex-grow container mx-auto p-6 md:p-10">
-                 {activeTab === 'tts' && <TextToSpeech onAudioMerged={setSharedAudioUrl} />}
+                 {activeTab === 'gemini' && <GeminiTab />}
+                 {activeTab === 'tts' && <TextToSpeech onAudioMerged={setSharedAudioUrl} onChunksUpdated={setSharedChunks} />}
                  {activeTab === 'filter' && <TextFilter />}
                  {activeTab === 'video' && (
                      <div className="h-full">
                          {sharedAudioUrl ? (
-                             <VideoMerger audioUrl={sharedAudioUrl} />
+                             <VideoMerger audioUrl={sharedAudioUrl} chunks={sharedChunks} />
                          ) : (
                              <div className="flex flex-col items-center justify-center p-20 bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
                                  <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
-                                     <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                     <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2-2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                  </div>
                                  <div className="space-y-2">
                                      <h2 className="text-xl font-bold text-white">Chưa có Audio</h2>

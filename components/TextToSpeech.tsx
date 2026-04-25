@@ -11,8 +11,15 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { audioBufferToWav } from '../src/lib/audioUtils';
 
-export const TextToSpeech: React.FC<{ onAudioMerged?: (url: string | null) => void }> = ({ onAudioMerged }) => {
+export const TextToSpeech: React.FC<{ 
+    onAudioMerged?: (url: string | null) => void,
+    onChunksUpdated?: (chunks: ChunkJob[]) => void 
+}> = ({ onAudioMerged, onChunksUpdated }) => {
     const [chunks, setChunks] = useState<ChunkJob[]>([]);
+    
+    useEffect(() => {
+        onChunksUpdated?.(chunks);
+    }, [chunks, onChunksUpdated]);
     const [speaker, setSpeaker] = useState<string>("BV074_streaming");
     const [selectedCountry, setSelectedCountry] = useState<string>(SPEAKER_GROUPS[0].country);
     const [processingState, setProcessingState] = useState<ProcessingState>('idle');
