@@ -64,34 +64,68 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
     const parseSrtToChunks = (srtText: string): ChunkJob[] => {
         const srtChunks: ChunkJob[] = [];
-        const blocks = srtText.trim().split(/\n\s*\n/);
-        for (const block of blocks) {
-            const lines = block.split('\n');
-            if (lines.length >= 3) {
-                const timeLine = lines[1];
-                const textLines = lines.slice(2).join('\n');
-                const [start, end] = timeLine.split(' --> ');
-                if (start && end) {
-                    const parseTime = (timeStr: string) => {
-                        const parts = timeStr.replace(',', '.').trim().split(':');
-                        if (parts.length === 3) {
-                            const hours = parseFloat(parts[0]);
-                            const minutes = parseFloat(parts[1]);
-                            const seconds = parseFloat(parts[2]);
-                            return hours * 3600 + minutes * 60 + seconds;
-                        }
-                        return 0;
-                    };
-                    srtChunks.push({
-                        id: Math.random().toString(36).substring(2, 9),
-                        text: textLines,
-                        status: 'finished',
-                        startTime: parseTime(start),
-                        endTime: parseTime(end)
-                    });
+        const lines = srtText.replace(/\r\n/g, '\n').split('\n');
+        
+        let currentChunk: any = null;
+        let pendingId = '';
+        
+        const parseTime = (timeStr: string) => {
+            const parts = timeStr.replace(',', '.').trim().split(':');
+            if (parts.length === 3) {
+                const hours = parseFloat(parts[0]);
+                const minutes = parseFloat(parts[1]);
+                const seconds = parseFloat(parts[2]);
+                return hours * 3600 + minutes * 60 + seconds;
+            }
+            return 0;
+        };
+
+        const timecodeRegex = /^(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})/;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            const timeMatch = line.match(timecodeRegex);
+            if (timeMatch) {
+                if (currentChunk) {
+                    const textLines = currentChunk.text.split('\n');
+                    if (textLines.length > 0 && /^\d+$/.test(textLines[textLines.length - 1].trim())) {
+                        pendingId = textLines.pop()!.trim();
+                        currentChunk.text = textLines.join('\n').trim();
+                    }
+                    srtChunks.push(currentChunk);
                 }
+                
+                if (!pendingId && i > 0) {
+                    const prevLine = lines[i-1].trim();
+                    if (/^\d+$/.test(prevLine)) {
+                        pendingId = prevLine;
+                    }
+                }
+
+                currentChunk = {
+                    id: pendingId || Math.random().toString(36).substring(2, 9),
+                    text: '',
+                    status: 'finished',
+                    startTime: parseTime(timeMatch[1]),
+                    endTime: parseTime(timeMatch[2])
+                };
+                pendingId = '';
+            } else if (currentChunk) {
+                currentChunk.text += (currentChunk.text ? '\n' : '') + line;
             }
         }
+        
+        if (currentChunk) {
+            const textLines = currentChunk.text.split('\n');
+            if (textLines.length > 0 && /^\d+$/.test(textLines[textLines.length - 1].trim()) && textLines.length > 1) {
+                textLines.pop();
+                currentChunk.text = textLines.join('\n').trim();
+            }
+            srtChunks.push(currentChunk);
+        }
+
         return srtChunks;
     };
     
