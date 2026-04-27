@@ -366,10 +366,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         setIsRendering(true);
         setProgress(0);
 
-        const stream = canvas.captureStream(30);
+        const stream = canvas.captureStream(60);
         
         if (!audioNodesRef.current) {
-            const audioContext = new AudioContext();
+            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' });
             const dest = audioContext.createMediaStreamDestination();
             
             // Subtitle Audio (Foreground)
@@ -416,7 +416,11 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             }
         }
 
-        const recorder = new MediaRecorder(combinedStream, { mimeType });
+        const recorder = new MediaRecorder(combinedStream, { 
+            mimeType,
+            videoBitsPerSecond: 8000000, // 8 Mbps
+            audioBitsPerSecond: 128000   // 128 kbps
+        });
         const recordedChunks: Blob[] = [];
 
         recorder.ondataavailable = (e) => {
@@ -436,12 +440,23 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             setIsRendering(false);
         };
 
+        if (audioNodesRef.current?.ctx.state === 'suspended') {
+            await audioNodesRef.current.ctx.resume();
+        }
+
         audio.currentTime = 0;
-        await audio.play();
         if (videoRef.current) {
             videoRef.current.currentTime = 0;
-            await videoRef.current.play();
         }
+
+        const playPromises: Promise<void>[] = [];
+        playPromises.push(audio.play().catch(e => console.warn(e)));
+        if (videoRef.current) {
+            playPromises.push(videoRef.current.play().catch(e => console.warn(e)));
+        }
+        await Promise.all(playPromises);
+
+        // Start recorder ONLY AFTER media is confirmed playing
         recorder.start();
 
         const updateProgress = () => {
@@ -575,10 +590,17 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                             <button 
                                 onClick={startRendering}
                                 disabled={isRendering || !bgSource}
-                                className="w-full py-5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:opacity-20 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs transition-all shadow-xl shadow-blue-900/20 active:scale-[0.98] flex items-center justify-center gap-4"
+                                className="w-full py-5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:opacity-20 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs transition-all shadow-xl shadow-blue-900/20 active:scale-[0.98] flex flex-col items-center justify-center gap-1"
                             >
-                                {isRendering ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                                {isRendering ? `Đang xuất video (${Math.round(progress)}%)...` : 'Bàn giao Render'}
+                                <div className="flex items-center gap-4">
+                                    {isRendering ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                                    <span>{isRendering ? `Đang xuất video (${Math.round(progress)}%)...` : 'Bàn giao Render'}</span>
+                                </div>
+                                {isRendering && (
+                                    <span className="text-[9px] text-blue-200 uppercase tracking-widest font-normal opacity-80 mt-1">
+                                        ⚠️ Không thu nhỏ tab này để tránh lệch Audio
+                                    </span>
+                                )}
                             </button>
                         </div>
                     </div>

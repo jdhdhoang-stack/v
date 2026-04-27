@@ -5,6 +5,7 @@ import { Settings } from '../components/Settings';
 import { TextToSpeech } from '../components/TextToSpeech';
 import { TextFilter } from '../components/TextFilter';
 import { VideoMerger } from '../components/VideoMerger';
+import { VideoJoiner } from '../components/VideoJoiner';
 
 const TabButton: React.FC<{ 
     name: string; 
@@ -31,6 +32,7 @@ import { ChunkJob } from './types';
 
 const App: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video'>('tts');
+    const [videoSubTab, setVideoSubTab] = useState<'produce' | 'join'>('produce');
     const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
     const [sharedChunks, setSharedChunks] = useState<ChunkJob[]>([]);
     const [sharedBgType, setSharedBgType] = useState<'image' | 'video' | 'color'>('color');
@@ -80,51 +82,65 @@ const App: React.FC = () => {
                  {activeTab === 'tts' && <TextToSpeech onAudioMerged={setSharedAudioUrl} onChunksUpdated={setSharedChunks} />}
                  {activeTab === 'filter' && <TextFilter />}
                  {activeTab === 'video' && (
-                     <div className="h-full">
-                         {sharedAudioUrl ? (
-                             <VideoMerger 
-                                audioUrl={sharedAudioUrl} 
-                                chunks={sharedChunks} 
-                                initialBgType={sharedBgType}
-                                initialBgSource={sharedBgSource}
-                                onBgChange={(type, source) => {
-                                    setSharedBgType(type);
-                                    setSharedBgSource(source);
-                                }}
-                                onAudioChange={(url, chunks) => {
-                                    setSharedAudioUrl(url);
-                                    setSharedChunks(chunks);
-                                }}
-                             />
+                     <div className="h-full flex flex-col gap-6">
+                         <div className="flex justify-center gap-4 border-b border-[#262626] pb-4">
+                             <button 
+                                onClick={() => setVideoSubTab('produce')}
+                                className={`px-6 py-2 rounded-lg text-sm font-bold uppercase tracking-widest transition-colors ${videoSubTab === 'produce' ? 'bg-blue-600 focus:outline-none text-white' : 'text-gray-500 hover:text-white'}`}
+                             >Sản xuất từ Audio</button>
+                             <button
+                                onClick={() => setVideoSubTab('join')}
+                                className={`px-6 py-2 rounded-lg text-sm font-bold uppercase tracking-widest transition-colors ${videoSubTab === 'join' ? 'bg-blue-600 focus:outline-none text-white' : 'text-gray-500 hover:text-white'}`}
+                             >Gộp video (Nối)</button>
+                         </div>
+                         {videoSubTab === 'produce' ? (
+                             sharedAudioUrl ? (
+                                 <VideoMerger 
+                                    audioUrl={sharedAudioUrl} 
+                                    chunks={sharedChunks} 
+                                    initialBgType={sharedBgType}
+                                    initialBgSource={sharedBgSource}
+                                    onBgChange={(type, source) => {
+                                        setSharedBgType(type);
+                                        setSharedBgSource(source);
+                                    }}
+                                    onAudioChange={(url, chunks) => {
+                                        setSharedAudioUrl(url);
+                                        setSharedChunks(chunks);
+                                    }}
+                                 />
+                             ) : (
+                                 <div className="flex flex-col items-center justify-center p-20 bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
+                                     <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
+                                         <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                     </div>
+                                     <div className="space-y-2">
+                                         <h2 className="text-xl font-bold text-white">Chưa có Audio</h2>
+                                         <p className="text-gray-500 max-w-sm mx-auto text-sm">Vui lòng quay lại tab "Tổng hợp" để tạo file âm thanh hoặc tải lên một file âm thanh từ thiết bị của bạn trước khi sản xuất video.</p>
+                                     </div>
+                                     <div className="flex flex-col sm:flex-row gap-4">
+                                         <button 
+                                            onClick={() => setActiveTab('tts')}
+                                            className="px-8 py-3 bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-600/30 transition-all active:scale-95"
+                                         >
+                                             Tới Tab Tổng hợp
+                                         </button>
+                                         <label className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20 cursor-pointer text-center">
+                                             Tải Audio lên
+                                             <input type="file" accept="audio/*" className="hidden" onChange={(e) => {
+                                                 const file = e.target.files?.[0];
+                                                 if (file) {
+                                                    const url = URL.createObjectURL(file);
+                                                    setSharedAudioUrl(url);
+                                                    setSharedChunks([]);
+                                                 }
+                                             }} />
+                                         </label>
+                                     </div>
+                                 </div>
+                             )
                          ) : (
-                             <div className="flex flex-col items-center justify-center p-20 bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
-                                 <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
-                                     <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                 </div>
-                                 <div className="space-y-2">
-                                     <h2 className="text-xl font-bold text-white">Chưa có Audio</h2>
-                                     <p className="text-gray-500 max-w-sm mx-auto text-sm">Vui lòng quay lại tab "Tổng hợp" để tạo file âm thanh hoặc tải lên một file âm thanh từ thiết bị của bạn trước khi sản xuất video.</p>
-                                 </div>
-                                 <div className="flex flex-col sm:flex-row gap-4">
-                                     <button 
-                                        onClick={() => setActiveTab('tts')}
-                                        className="px-8 py-3 bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-600/30 transition-all active:scale-95"
-                                     >
-                                         Tới Tab Tổng hợp
-                                     </button>
-                                     <label className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20 cursor-pointer text-center">
-                                         Tải Audio lên
-                                         <input type="file" accept="audio/*" className="hidden" onChange={(e) => {
-                                             const file = e.target.files?.[0];
-                                             if (file) {
-                                                const url = URL.createObjectURL(file);
-                                                setSharedAudioUrl(url);
-                                                setSharedChunks([]);
-                                             }
-                                         }} />
-                                     </label>
-                                 </div>
-                             </div>
+                             <VideoJoiner />
                          )}
                      </div>
                  )}

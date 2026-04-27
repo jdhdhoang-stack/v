@@ -8,6 +8,8 @@ interface ResultsPanelProps {
     chunks: ChunkJob[];
     processingState: ProcessingState;
     mergedAudioUrl: string | null;
+    isMerging: boolean;
+    mergeProgress: number;
     onCancel: () => void;
     removeChunk: (chunkId: string) => void;
     onClearQueue: () => void;
@@ -21,7 +23,7 @@ interface ResultsPanelProps {
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({ 
-    chunks, processingState, mergedAudioUrl, onCancel, removeChunk, onClearQueue, onDownloadAll,
+    chunks, processingState, mergedAudioUrl, isMerging, mergeProgress, onCancel, removeChunk, onClearQueue, onDownloadAll,
     onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount
 }) => {
     return (
@@ -79,7 +81,24 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                  </div>
              </div>
             
-             {mergedAudioUrl && (
+             {isMerging && (
+                <div className="m-6 p-6 bg-indigo-900/20 rounded-2xl border border-indigo-900/30 flex justify-between items-center animate-in zoom-in duration-300">
+                    <div className="flex-grow mr-4">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                                Đang gộp âm thanh...
+                            </h3>
+                            <span className="text-xs font-bold text-indigo-300">{mergeProgress}%</span>
+                        </div>
+                        <div className="h-2 w-full bg-indigo-950 rounded-full overflow-hidden">
+                            <div className="h-full bg-indigo-500 transition-all duration-300 ease-out" style={{ width: `${mergeProgress}%` }}></div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+             {mergedAudioUrl && !isMerging && (
                 <div className="m-6 p-6 bg-blue-900/20 rounded-2xl border border-blue-900/20 relative overflow-hidden group animate-in zoom-in duration-300">
                     <div className="relative z-10 space-y-4">
                         <div className="flex justify-between items-center">

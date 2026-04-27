@@ -1,2 +1,3 @@
 
-export const mammoth = (window as any).mammoth;
+import * as mammoth from 'mammoth';
+export { mammoth };

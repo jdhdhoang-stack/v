@@ -23,6 +23,8 @@ export const TextToSpeech: React.FC<{
     const [speaker, setSpeaker] = useState<string>("BV074_streaming");
     const [selectedCountry, setSelectedCountry] = useState<string>(SPEAKER_GROUPS[0].country);
     const [processingState, setProcessingState] = useState<ProcessingState>('idle');
+    const [isMerging, setIsMerging] = useState(false);
+    const [mergeProgress, setMergeProgress] = useState(0);
     const [maxChars, setMaxChars] = useState(1500);
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
     const [concurrentThreads, setConcurrentThreads] = useState(3);
@@ -46,33 +48,45 @@ export const TextToSpeech: React.FC<{
             const mergeAudio = async () => {
                 let audioContext: AudioContext | null = null;
                 try {
+                    setIsMerging(true);
+                    setMergeProgress(0);
                     const finishedChunks = chunks.filter(c => c.status === 'finished' && c.audioUrl);
-                    if (finishedChunks.length === 0) return;
-
-                    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                    
-                    // Load and decode all audio chunks
-                    const audioBuffers = await Promise.all(
-                        finishedChunks.map(async chunk => {
-                            try {
-                                const response = await fetch(chunk.audioUrl!);
-                                const arrayBuffer = await response.arrayBuffer();
-                                const audioBuffer = await audioContext!.decodeAudioData(arrayBuffer);
-                                return {
-                                    buffer: audioBuffer,
-                                    startTime: chunk.startTime,
-                                };
-                            } catch (e) {
-                                console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
-                                throw e;
-                            }
-                        })
-                    );
+                    if (finishedChunks.length === 0) {
+                        setIsMerging(false);
+                        return;
+                    }
 
                     // Check if we should use timing-based merge
                     const isTimedMerge = chunks.some(c => c.startTime !== undefined);
 
                     if (isTimedMerge) {
+                        audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                        
+                        // Load and decode in batches
+                        const audioBuffers = [];
+                        const batchSize = 10;
+                        for (let i = 0; i < finishedChunks.length; i += batchSize) {
+                            const batch = finishedChunks.slice(i, i + batchSize);
+                            const batchResult = await Promise.all(
+                                batch.map(async chunk => {
+                                    try {
+                                        const response = await fetch(chunk.audioUrl!);
+                                        const arrayBuffer = await response.arrayBuffer();
+                                        const audioBuffer = await audioContext!.decodeAudioData(arrayBuffer);
+                                        return {
+                                            buffer: audioBuffer,
+                                            startTime: chunk.startTime,
+                                        };
+                                    } catch (e) {
+                                        console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
+                                        return null;
+                                    }
+                                })
+                            );
+                            audioBuffers.push(...batchResult.filter(Boolean) as any[]);
+                            setMergeProgress(Math.floor((Math.min(i + batchSize, finishedChunks.length) / finishedChunks.length) * 50));
+                        }
+
                         // Sort by startTime
                         const sortedBuffers = [...audioBuffers].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
                         
@@ -152,7 +166,9 @@ export const TextToSpeech: React.FC<{
                         });
 
                         const renderedBuffer = await offlineCtx.startRendering();
+                        setMergeProgress(90);
                         const wavBlob = audioBufferToWav(renderedBuffer);
+                        setMergeProgress(100);
                         
                         const url = URL.createObjectURL(wavBlob);
                         setMergedAudioUrl(prev => {
@@ -162,10 +178,18 @@ export const TextToSpeech: React.FC<{
                         onAudioMerged?.(url);
                     } else {
                         // Regular concatenation for non-SRT text
-                        const blobs = await Promise.all(
-                            finishedChunks.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
-                        );
+                        const blobs: Blob[] = [];
+                        const batchSize = 25;
+                        for (let i = 0; i < finishedChunks.length; i += batchSize) {
+                            const batch = finishedChunks.slice(i, i + batchSize);
+                            const batchBlobs = await Promise.all(
+                                batch.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
+                            );
+                            blobs.push(...batchBlobs);
+                            setMergeProgress(Math.floor((Math.min(i + batchSize, finishedChunks.length) / finishedChunks.length) * 90));
+                        }
                         const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                        setMergeProgress(100);
                         
                         const url = URL.createObjectURL(mergedBlob);
                         setMergedAudioUrl(prev => {
@@ -177,6 +201,7 @@ export const TextToSpeech: React.FC<{
                 } catch (error) {
                     console.error("Gộp file âm thanh thất bại:", error);
                 } finally {
+                    setIsMerging(false);
                     if (audioContext) {
                         await audioContext.close();
                     }
@@ -381,6 +406,8 @@ export const TextToSpeech: React.FC<{
                 chunks={chunks}
                 processingState={processingState}
                 mergedAudioUrl={mergedAudioUrl}
+                isMerging={isMerging}
+                mergeProgress={mergeProgress}
                 onCancel={handleCancel}
                 removeChunk={removeChunk}
                 onClearQueue={clearQueue}
