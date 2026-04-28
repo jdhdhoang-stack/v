@@ -60,7 +60,8 @@ export const TextToSpeech: React.FC<{
                     const isTimedMerge = chunks.some(c => c.startTime !== undefined);
 
                     if (isTimedMerge) {
-                        audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                        const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+                        audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
                         
                         // Load and decode in batches
                         const audioBuffers = [];
@@ -72,7 +73,19 @@ export const TextToSpeech: React.FC<{
                                     try {
                                         const response = await fetch(chunk.audioUrl!);
                                         const arrayBuffer = await response.arrayBuffer();
-                                        const audioBuffer = await audioContext!.decodeAudioData(arrayBuffer);
+                                        
+                                        // Wrap decode in Promise for older Safari support + safety
+                                        const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+                                            try {
+                                                const promise = audioContext!.decodeAudioData(arrayBuffer, resolve, reject);
+                                                if (promise) {
+                                                    promise.catch(reject);
+                                                }
+                                            } catch (err) {
+                                                reject(err);
+                                            }
+                                        });
+
                                         return {
                                             buffer: audioBuffer,
                                             startTime: chunk.startTime,
@@ -85,6 +98,10 @@ export const TextToSpeech: React.FC<{
                             );
                             audioBuffers.push(...batchResult.filter(Boolean) as any[]);
                             setMergeProgress(Math.floor((Math.min(i + batchSize, finishedChunks.length) / finishedChunks.length) * 50));
+                        }
+                        
+                        if (audioBuffers.length === 0) {
+                            throw new Error("Không giải mã được bất kỳ fragment âm thanh nào.");
                         }
 
                         // Sort by startTime
@@ -167,6 +184,10 @@ export const TextToSpeech: React.FC<{
 
                         const renderedBuffer = await offlineCtx.startRendering();
                         setMergeProgress(90);
+                        
+                        // Yield to main thread so UI can update to 90% before heavy sync task
+                        await new Promise(resolve => setTimeout(resolve, 50));
+
                         const wavBlob = audioBufferToWav(renderedBuffer);
                         setMergeProgress(100);
                         
