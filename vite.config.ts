@@ -18,7 +18,6 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, './src'),
-          'node-fetch': path.resolve(__dirname, './src/lib/dummy-fetch.ts'),
         }
       },
       build: { minify: false }

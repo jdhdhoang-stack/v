@@ -7,7 +7,7 @@ import { Download, Trash2, Layers, RefreshCcw } from 'lucide-react';
 interface ResultsPanelProps {
     chunks: ChunkJob[];
     processingState: ProcessingState;
-    mergedAudioUrl: string | null;
+    mergedAudioUrls: string[];
     isMerging: boolean;
     mergeProgress: number;
     onCancel: () => void;
@@ -23,7 +23,7 @@ interface ResultsPanelProps {
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({ 
-    chunks, processingState, mergedAudioUrl, isMerging, mergeProgress, onCancel, removeChunk, onClearQueue, onDownloadAll,
+    chunks, processingState, mergedAudioUrls, isMerging, mergeProgress, onCancel, removeChunk, onClearQueue, onDownloadAll,
     onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount
 }) => {
     return (
@@ -56,7 +56,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                                 Thử lại lỗi ({failedChunksCount})
                             </button>
                         )}
-                        {processingState === 'idle' && chunks.length > 0 && !mergedAudioUrl && (
+                        {processingState === 'idle' && chunks.length > 0 && mergedAudioUrls.length === 0 && (
                              <button
                                 onClick={onClearQueue}
                                 className="p-2 text-gray-500 hover:text-white hover:bg-[#262626] rounded-lg transition-all"
@@ -98,26 +98,33 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                 </div>
             )}
 
-             {mergedAudioUrl && !isMerging && (
+             {mergedAudioUrls.length > 0 && !isMerging && (
                 <div className="m-6 p-6 bg-blue-900/20 rounded-2xl border border-blue-900/20 relative overflow-hidden group animate-in zoom-in duration-300">
                     <div className="relative z-10 space-y-4">
                         <div className="flex justify-between items-center">
                             <h3 className="text-[10px] font-bold text-blue-400 uppercase tracking-widest flex items-center gap-2">
                                 <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
-                                Sẵn sàng Sản xuất (Bản Master)
+                                Sẵn sàng Sản xuất {mergedAudioUrls.length > 1 ? `(${mergedAudioUrls.length} Bản Master)` : '(Bản Master)'}
                             </h3>
                         </div>
-                        <audio controls src={mergedAudioUrl} className="w-full h-10 invert brightness-200 hue-rotate-180">
-                            Trình duyệt không hỗ trợ.
-                        </audio>
+                        <div className="space-y-4 max-h-[30vh] overflow-y-auto pr-2 custom-scrollbar">
+                            {mergedAudioUrls.map((url, i) => (
+                                <div key={i} className="flex flex-col gap-2">
+                                    {mergedAudioUrls.length > 1 && <span className="text-[10px] text-blue-300/80 font-bold uppercase tracking-widest ml-1">Part {i + 1}</span>}
+                                    <audio controls src={url} className="w-full h-10 invert brightness-200 hue-rotate-180">
+                                        Trình duyệt không hỗ trợ.
+                                    </audio>
+                                </div>
+                            ))}
+                        </div>
                         
-                        <div className="grid grid-cols-1 gap-3">
+                        <div className="grid grid-cols-1 gap-3 pt-2">
                             <button
                                 onClick={onDownloadAll}
                                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all active:scale-[0.97] uppercase tracking-widest"
                             >
                                 <Download size={16} />
-                                Tải xuống MP3
+                                {mergedAudioUrls.length > 1 ? `Tải xuống tất cả (${mergedAudioUrls.length} file)` : 'Tải xuống Audio'}
                             </button>
                         </div>
                     </div>

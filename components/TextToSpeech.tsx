@@ -29,7 +29,7 @@ export const TextToSpeech: React.FC<{
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
     const [concurrentThreads, setConcurrentThreads] = useState(3);
     const [requestDelay, setRequestDelay] = useState(500);
-    const [mergedAudioUrl, setMergedAudioUrl] = useState<string | null>(null);
+    const [mergedAudioUrls, setMergedAudioUrls] = useState<string[]>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -58,167 +58,161 @@ export const TextToSpeech: React.FC<{
 
                     // Check if we should use timing-based merge
                     const isTimedMerge = chunks.some(c => c.startTime !== undefined);
+                    const PART_SIZE = 1000;
+                    const finalUrls: string[] = [];
 
-                    if (isTimedMerge) {
-                        const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-                        audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
-                        
-                        // Load and decode in batches
-                        const audioBuffers = [];
-                        const batchSize = 10;
-                        for (let i = 0; i < finishedChunks.length; i += batchSize) {
-                            const batch = finishedChunks.slice(i, i + batchSize);
-                            const batchResult = await Promise.all(
-                                batch.map(async chunk => {
-                                    try {
-                                        const response = await fetch(chunk.audioUrl!);
-                                        const arrayBuffer = await response.arrayBuffer();
-                                        
-                                        // Wrap decode in Promise for older Safari support + safety
-                                        const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
-                                            try {
-                                                const promise = audioContext!.decodeAudioData(arrayBuffer, resolve, reject);
-                                                if (promise) {
-                                                    promise.catch(reject);
+                    for (let p = 0; p < finishedChunks.length; p += PART_SIZE) {
+                        const partChunks = finishedChunks.slice(p, p + PART_SIZE);
+                        const progressOffset = (p / finishedChunks.length) * 100;
+                        const progressMultiplier = partChunks.length / finishedChunks.length;
+
+                        if (isTimedMerge) {
+                            const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+                            audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
+                            
+                            const baseTime = partChunks[0].startTime || 0;
+                            // Load and decode in batches
+                            const audioBuffers = [];
+                            const batchSize = 10;
+                            for (let i = 0; i < partChunks.length; i += batchSize) {
+                                const batch = partChunks.slice(i, i + batchSize);
+                                const batchResult = await Promise.all(
+                                    batch.map(async chunk => {
+                                        try {
+                                            const response = await fetch(chunk.audioUrl!);
+                                            const arrayBuffer = await response.arrayBuffer();
+                                            
+                                            // Wrap decode in Promise for older Safari support + safety
+                                            const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+                                                try {
+                                                    const promise = audioContext!.decodeAudioData(arrayBuffer, resolve, reject);
+                                                    if (promise) {
+                                                        promise.catch(reject);
+                                                    }
+                                                } catch (err) {
+                                                    reject(err);
                                                 }
-                                            } catch (err) {
-                                                reject(err);
-                                            }
-                                        });
+                                            });
 
-                                        return {
-                                            buffer: audioBuffer,
-                                            startTime: chunk.startTime,
-                                        };
-                                    } catch (e) {
-                                        console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
-                                        return null;
-                                    }
-                                })
-                            );
-                            audioBuffers.push(...batchResult.filter(Boolean) as any[]);
-                            setMergeProgress(Math.floor((Math.min(i + batchSize, finishedChunks.length) / finishedChunks.length) * 50));
-                        }
-                        
-                        if (audioBuffers.length === 0) {
-                            throw new Error("Không giải mã được bất kỳ fragment âm thanh nào.");
-                        }
+                                            return {
+                                                buffer: audioBuffer,
+                                                startTime: (chunk.startTime !== undefined ? chunk.startTime - baseTime : 0),
+                                            };
+                                        } catch (e) {
+                                            console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
+                                            return null;
+                                        }
+                                    })
+                                );
+                                audioBuffers.push(...batchResult.filter(Boolean) as any[]);
+                                setMergeProgress(Math.floor(progressOffset + (Math.min(i + batchSize, partChunks.length) / partChunks.length) * 50 * progressMultiplier));
+                            }
+                            
+                            if (audioBuffers.length === 0) {
+                                throw new Error("Không giải mã được bất kỳ fragment âm thanh nào.");
+                            }
 
-                        // Sort by startTime
-                        const sortedBuffers = [...audioBuffers].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
-                        
-                        let currentTime = 0;
-                        const timedBuffers = sortedBuffers.map((item, index, arr) => {
-                                const nextItem = arr[index + 1];
-                                const originalDuration = item.buffer.duration;
-                                const idealStart = item.startTime || 0;
-                                
-                                // Dynamic Sync: Start at ideal time, or as soon as possible if delayed
-                                const actualStart = Math.max(idealStart, currentTime);
-                                
-                                let speed = 1.0;
-                                // Look ahead at next segments to determine if we need to catch up
-                                // If we have a next segment, try to finish before it starts
-                                if (nextItem && nextItem.startTime !== undefined) {
-                                    const nextIdealStart = nextItem.startTime;
-                                    const availableWindow = nextIdealStart - actualStart;
+                            // Sort by startTime
+                            const sortedBuffers = [...audioBuffers].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+                            
+                            let currentTime = 0;
+                            const timedBuffers = sortedBuffers.map((item, index, arr) => {
+                                    const nextItem = arr[index + 1];
+                                    const originalDuration = item.buffer.duration;
+                                    const idealStart = item.startTime || 0;
                                     
-                                    // If we are already behind or the window is tight, calculate speed to finish on time
-                                    if (availableWindow <= 0) {
-                                        speed = 1.25; // Max speed if already behind
-                                    } else if (originalDuration > availableWindow) {
-                                        speed = Math.min(1.25, originalDuration / availableWindow);
-                                    }
-
-                                    // Check if this segment is so long it pushes the next one into the one after it
-                                    const itemAfterNext = arr[index + 2];
-                                    if (itemAfterNext && itemAfterNext.startTime !== undefined) {
-                                        const afterNextIdealStart = itemAfterNext.startTime;
-                                        // Estimate when we would finish the next segment if we both go at max speed
-                                        const estimatedNextStart = actualStart + (originalDuration / speed);
-                                        const nextSegmentDuration = nextItem.buffer.duration;
-                                        const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.25);
+                                    // Dynamic Sync: Start at ideal time, or as soon as possible if delayed
+                                    const actualStart = Math.max(idealStart, currentTime);
+                                    
+                                    let speed = 1.0;
+                                    // Look ahead at next segments to determine if we need to catch up
+                                    if (nextItem && nextItem.startTime !== undefined) {
+                                        const nextIdealStart = nextItem.startTime;
+                                        const availableWindow = nextIdealStart - actualStart;
                                         
-                                        // If even with the next segment at 1.25x we are still pushing the one after that,
-                                        // we MUST ensure this one is at least trying to help
-                                        if (estimatedAfterNextStart > afterNextIdealStart) {
-                                            // Increase speed further towards 1.25 if not already there
-                                            speed = Math.max(speed, Math.min(1.25, speed * 1.1));
+                                        if (availableWindow <= 0) {
+                                            speed = 1.25; 
+                                        } else if (originalDuration > availableWindow) {
+                                            speed = Math.min(1.25, originalDuration / availableWindow);
+                                        }
+
+                                        const itemAfterNext = arr[index + 2];
+                                        if (itemAfterNext && itemAfterNext.startTime !== undefined) {
+                                            const afterNextIdealStart = itemAfterNext.startTime;
+                                            const estimatedNextStart = actualStart + (originalDuration / speed);
+                                            const nextSegmentDuration = nextItem.buffer.duration;
+                                            const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.25);
+                                            
+                                            if (estimatedAfterNextStart > afterNextIdealStart) {
+                                                speed = Math.max(speed, Math.min(1.25, speed * 1.1));
+                                            }
                                         }
                                     }
-                                }
 
-                                // Ensure speed is a valid number and at least 1.0
-                                speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.25, speed));
-                                
-                                const effectiveDuration = originalDuration / speed;
-                                currentTime = actualStart + effectiveDuration;
+                                    speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.25, speed));
+                                    
+                                    const effectiveDuration = originalDuration / speed;
+                                    currentTime = actualStart + effectiveDuration;
 
-                                return {
-                                    ...item,
-                                    actualStartTime: actualStart,
-                                    playbackRate: speed
-                                };
+                                    return {
+                                        ...item,
+                                        actualStartTime: actualStart,
+                                        playbackRate: speed
+                                    };
+                                });
+
+                            const totalDuration = timedBuffers.length > 0 
+                                ? timedBuffers.reduce((max, item) => Math.max(max, item.actualStartTime + (item.buffer.duration / (item.playbackRate || 1.0))), 0)
+                                : 0;
+                            
+                            const safeTotalDuration = totalDuration + 0.1;
+
+                            const offlineCtx = new OfflineAudioContext(
+                                audioBuffers[0].buffer.numberOfChannels,
+                                Math.ceil(safeTotalDuration * audioBuffers[0].buffer.sampleRate),
+                                audioBuffers[0].buffer.sampleRate
+                            );
+
+                            timedBuffers.forEach(item => {
+                                const source = offlineCtx.createBufferSource();
+                                source.buffer = item.buffer;
+                                source.playbackRate.value = item.playbackRate || 1.0;
+                                source.connect(offlineCtx.destination);
+                                source.start(item.actualStartTime);
                             });
 
-                        const totalDuration = timedBuffers.length > 0 
-                            ? timedBuffers.reduce((max, item) => Math.max(max, item.actualStartTime + (item.buffer.duration / (item.playbackRate || 1.0))), 0)
-                            : 0;
-                        
-                        const safeTotalDuration = totalDuration + 0.1;
+                            const renderedBuffer = await offlineCtx.startRendering();
+                            setMergeProgress(Math.floor(progressOffset + 90 * progressMultiplier));
+                            
+                            await new Promise(resolve => setTimeout(resolve, 50));
 
-                        // Use OfflineAudioContext for precise mixing
-                        const offlineCtx = new OfflineAudioContext(
-                            audioBuffers[0].buffer.numberOfChannels,
-                            Math.ceil(safeTotalDuration * audioBuffers[0].buffer.sampleRate),
-                            audioBuffers[0].buffer.sampleRate
-                        );
-
-                        timedBuffers.forEach(item => {
-                            const source = offlineCtx.createBufferSource();
-                            source.buffer = item.buffer;
-                            source.playbackRate.value = item.playbackRate || 1.0;
-                            source.connect(offlineCtx.destination);
-                            source.start(item.actualStartTime);
-                        });
-
-                        const renderedBuffer = await offlineCtx.startRendering();
-                        setMergeProgress(90);
-                        
-                        // Yield to main thread so UI can update to 90% before heavy sync task
-                        await new Promise(resolve => setTimeout(resolve, 50));
-
-                        const wavBlob = audioBufferToWav(renderedBuffer);
-                        setMergeProgress(100);
-                        
-                        const url = URL.createObjectURL(wavBlob);
-                        setMergedAudioUrl(prev => {
-                            if (prev) URL.revokeObjectURL(prev);
-                            return url;
-                        });
-                        onAudioMerged?.(url);
-                    } else {
-                        // Regular concatenation for non-SRT text
-                        const blobs: Blob[] = [];
-                        const batchSize = 25;
-                        for (let i = 0; i < finishedChunks.length; i += batchSize) {
-                            const batch = finishedChunks.slice(i, i + batchSize);
-                            const batchBlobs = await Promise.all(
-                                batch.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
-                            );
-                            blobs.push(...batchBlobs);
-                            setMergeProgress(Math.floor((Math.min(i + batchSize, finishedChunks.length) / finishedChunks.length) * 90));
+                            const wavBlob = audioBufferToWav(renderedBuffer);
+                            const url = URL.createObjectURL(wavBlob);
+                            finalUrls.push(url);
+                        } else {
+                            // Regular concatenation for non-SRT text
+                            const blobs: Blob[] = [];
+                            const batchSize = 25;
+                            for (let i = 0; i < partChunks.length; i += batchSize) {
+                                const batch = partChunks.slice(i, i + batchSize);
+                                const batchBlobs = await Promise.all(
+                                    batch.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
+                                );
+                                blobs.push(...batchBlobs);
+                                setMergeProgress(Math.floor(progressOffset + (Math.min(i + batchSize, partChunks.length) / partChunks.length) * 90 * progressMultiplier));
+                            }
+                            const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                            const url = URL.createObjectURL(mergedBlob);
+                            finalUrls.push(url);
                         }
-                        const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
-                        setMergeProgress(100);
-                        
-                        const url = URL.createObjectURL(mergedBlob);
-                        setMergedAudioUrl(prev => {
-                            if (prev) URL.revokeObjectURL(prev);
-                            return url;
-                        });
-                        onAudioMerged?.(url);
                     }
+
+                    setMergeProgress(100);
+                    setMergedAudioUrls(prev => {
+                        prev.forEach(u => URL.revokeObjectURL(u));
+                        return finalUrls;
+                    });
+                    onAudioMerged?.(finalUrls.length > 0 ? finalUrls[0] : null);
                 } catch (error) {
                     console.error("Gộp file âm thanh thất bại:", error);
                 } finally {
@@ -230,9 +224,9 @@ export const TextToSpeech: React.FC<{
             };
             mergeAudio();
         } else if (processingState === 'processing' || totalChunksCount === 0) {
-            if (mergedAudioUrl) {
-                URL.revokeObjectURL(mergedAudioUrl);
-                setMergedAudioUrl(null);
+            if (mergedAudioUrls.length > 0) {
+                mergedAudioUrls.forEach(u => URL.revokeObjectURL(u));
+                setMergedAudioUrls([]);
                 onAudioMerged?.(null);
             }
         }
@@ -381,18 +375,27 @@ export const TextToSpeech: React.FC<{
         }
     }, []);
 
-    const handleDownloadAll = useCallback(() => {
-        if (!mergedAudioUrl) return;
+    const handleDownloadAll = useCallback(async () => {
+        if (mergedAudioUrls.length === 0) return;
         const isTimedMerge = chunks.some(c => c.startTime !== undefined);
-        const fileName = isTimedMerge ? 'audio_timed_sync.wav' : 'audio_merged.mp3';
+        const baseName = isTimedMerge ? 'audio_timed_sync' : 'audio_merged';
+        const ext = isTimedMerge ? '.wav' : '.mp3';
         
-        const a = document.createElement('a');
-        a.href = mergedAudioUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-    }, [mergedAudioUrl, chunks]);
+        for (let i = 0; i < mergedAudioUrls.length; i++) {
+            const fileName = mergedAudioUrls.length > 1 ? `${baseName}_part${i + 1}${ext}` : `${baseName}${ext}`;
+            const a = document.createElement('a');
+            a.href = mergedAudioUrls[i];
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            
+            // Add a small delay to avoid browser blocking multiple downloads
+            if (mergedAudioUrls.length > 1 && i < mergedAudioUrls.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+    }, [mergedAudioUrls, chunks]);
     
     const handleCountryChange = useCallback((newCountry: string) => {
         setSelectedCountry(newCountry);
@@ -426,7 +429,7 @@ export const TextToSpeech: React.FC<{
             <ResultsPanel
                 chunks={chunks}
                 processingState={processingState}
-                mergedAudioUrl={mergedAudioUrl}
+                mergedAudioUrls={mergedAudioUrls}
                 isMerging={isMerging}
                 mergeProgress={mergeProgress}
                 onCancel={handleCancel}
