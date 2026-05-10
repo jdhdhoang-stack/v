@@ -70,7 +70,7 @@ export const TextToSpeech: React.FC<{
                             const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
                             audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
                             
-                            const baseTime = partChunks[0].startTime || 0;
+                            const baseTime = p === 0 ? 0 : (partChunks[0].startTime || 0);
                             // Load and decode in batches
                             const audioBuffers = [];
                             const batchSize = 10;
