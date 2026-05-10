@@ -149,15 +149,15 @@ export class TextProcessor {
             } else if (extension === 'srt') {
                 reader.onload = (e) => {
                     const content = e.target?.result as string;
-                    // SRT Parser: Sequence, Timing, Text, empty line
-                    const srtRegex = /(\d+)\r?\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
+                    // SRT Parser: Sequence (optional), Timing, Text, empty line
+                    const srtRegex = /(?:\d+\r?\n)?(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
                     const items: Array<{ text: string; startTime: number; endTime: number; timestamp: string }> = [];
                     let match;
                     
                     while ((match = srtRegex.exec(content)) !== null) {
-                        const start = match[2];
-                        const end = match[3];
-                        const text = match[4].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
+                        const start = match[1];
+                        const end = match[2];
+                        const text = match[3].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
                         if (text) {
                             items.push({ 
                                 text, 
@@ -172,19 +172,28 @@ export class TextProcessor {
                         // Fallback: try simple split if regex fails
                         const lines = content.split(/\r?\n\r?\n/);
                         lines.forEach(block => {
-                            const linesInBlock = block.split(/\r?\n/);
-                            if (linesInBlock.length >= 3) {
-                                const timingParts = linesInBlock[1].split(' --> ');
-                                const startTimeStr = timingParts[0];
-                                const endTimeStr = timingParts[1];
-                                const text = linesInBlock.slice(2).join(' ').replace(/<[^>]*>/g, '').trim();
-                                if (text) {
-                                    items.push({ 
-                                        text, 
-                                        startTime: this.parseTimestampToSeconds(startTimeStr),
-                                        endTime: this.parseTimestampToSeconds(endTimeStr),
-                                        timestamp: startTimeStr 
-                                    });
+                            const blockContent = block.trim();
+                            if (!blockContent) return;
+                            
+                            const timingRegex = /(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/;
+                            const timingMatch = blockContent.match(timingRegex);
+                            if (timingMatch) {
+                                const startTimeStr = timingMatch[1];
+                                const endTimeStr = timingMatch[2];
+                                
+                                const linesInBlock = blockContent.split(/\r?\n/);
+                                const timingLineIdx = linesInBlock.findIndex(line => timingRegex.test(line));
+                                
+                                if (timingLineIdx !== -1 && timingLineIdx + 1 < linesInBlock.length) {
+                                    const text = linesInBlock.slice(timingLineIdx + 1).join(' ').replace(/<[^>]*>/g, '').trim();
+                                    if (text) {
+                                        items.push({ 
+                                            text, 
+                                            startTime: this.parseTimestampToSeconds(startTimeStr),
+                                            endTime: this.parseTimestampToSeconds(endTimeStr),
+                                            timestamp: startTimeStr 
+                                        });
+                                    }
                                 }
                             }
                         });

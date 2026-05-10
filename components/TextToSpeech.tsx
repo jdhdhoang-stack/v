@@ -234,7 +234,7 @@ export const TextToSpeech: React.FC<{
                     console.error("Gộp file âm thanh thất bại:", error);
                 } finally {
                     setIsMerging(false);
-                    if (audioContext) {
+                    if (audioContext && typeof audioContext.close === 'function') {
                         await audioContext.close();
                     }
                 }
@@ -386,7 +386,7 @@ export const TextToSpeech: React.FC<{
 
     const handleCancel = useCallback(() => {
         if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
+            abortControllerRef.current.abort("Người dùng đã hủy");
             setChunks(prev => prev.map(c => c.status === 'processing' ? { ...c, status: 'pending' } : c));
             setProcessingState('idle');
         }
