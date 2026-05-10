@@ -126,7 +126,7 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                                     type="number" value={isNaN(concurrentThreads) ? '' : concurrentThreads} 
                                     onChange={e => {
                                         const val = parseInt(e.target.value, 10);
-                                        setConcurrentThreads(isNaN(val) ? 0 : Math.min(100, val));
+                                        setConcurrentThreads(isNaN(val) ? 0 : Math.min(500, Math.max(1, val)));
                                     }}
                                     className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
                                 />

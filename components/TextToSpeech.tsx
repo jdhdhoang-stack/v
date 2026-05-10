@@ -27,8 +27,8 @@ export const TextToSpeech: React.FC<{
     const [mergeProgress, setMergeProgress] = useState(0);
     const [maxChars, setMaxChars] = useState(1500);
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
-    const [concurrentThreads, setConcurrentThreads] = useState(3);
-    const [requestDelay, setRequestDelay] = useState(500);
+    const [concurrentThreads, setConcurrentThreads] = useState(10);
+    const [requestDelay, setRequestDelay] = useState(100);
     const [mergedAudioUrls, setMergedAudioUrls] = useState<string[]>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
@@ -58,7 +58,7 @@ export const TextToSpeech: React.FC<{
 
                     // Check if we should use timing-based merge
                     const isTimedMerge = chunks.some(c => c.startTime !== undefined);
-                    const PART_SIZE = 1000;
+                    const PART_SIZE = 500;
                     const finalUrls: string[] = [];
 
                     for (let p = 0; p < finishedChunks.length; p += PART_SIZE) {
@@ -105,7 +105,9 @@ export const TextToSpeech: React.FC<{
                                     })
                                 );
                                 audioBuffers.push(...batchResult.filter(Boolean) as any[]);
-                                setMergeProgress(Math.floor(progressOffset + (Math.min(i + batchSize, partChunks.length) / partChunks.length) * 50 * progressMultiplier));
+                                setMergeProgress(Math.floor(progressOffset + (i / partChunks.length) * 50 * progressMultiplier));
+                                // Yield to main thread
+                                await new Promise(resolve => setTimeout(resolve, 0));
                             }
                             
                             if (audioBuffers.length === 0) {
@@ -167,6 +169,11 @@ export const TextToSpeech: React.FC<{
                             
                             const safeTotalDuration = totalDuration + 0.1;
 
+                            // Limit max duration per part to prevent crashing OfflineAudioContext (e.g., max 15 minutes)
+                            if (safeTotalDuration > 900) {
+                                console.warn(`Phần gộp âm thanh quá dài (${safeTotalDuration}s), có thể gây treo trình duyệt. Khuyến nghị tách nhỏ file SRT.`);
+                            }
+
                             const offlineCtx = new OfflineAudioContext(
                                 audioBuffers[0].buffer.numberOfChannels,
                                 Math.ceil(safeTotalDuration * audioBuffers[0].buffer.sampleRate),
@@ -192,14 +199,24 @@ export const TextToSpeech: React.FC<{
                         } else {
                             // Regular concatenation for non-SRT text
                             const blobs: Blob[] = [];
-                            const batchSize = 25;
+                            const batchSize = 50;
                             for (let i = 0; i < partChunks.length; i += batchSize) {
                                 const batch = partChunks.slice(i, i + batchSize);
                                 const batchBlobs = await Promise.all(
-                                    batch.map(chunk => fetch(chunk.audioUrl!).then(res => res.blob()))
+                                    batch.map(async chunk => {
+                                        try {
+                                            const res = await fetch(chunk.audioUrl!);
+                                            return await res.blob();
+                                        } catch (e) {
+                                            console.warn("Fetch blob failed", e);
+                                            return new Blob([]);
+                                        }
+                                    })
                                 );
                                 blobs.push(...batchBlobs);
-                                setMergeProgress(Math.floor(progressOffset + (Math.min(i + batchSize, partChunks.length) / partChunks.length) * 90 * progressMultiplier));
+                                setMergeProgress(Math.floor(progressOffset + ((i + batchSize) / partChunks.length) * 90 * progressMultiplier));
+                                // Yield to main thread
+                                await new Promise(resolve => setTimeout(resolve, 0));
                             }
                             const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
                             const url = URL.createObjectURL(mergedBlob);
