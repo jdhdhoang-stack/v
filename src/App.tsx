@@ -30,7 +30,7 @@ const TabButton: React.FC<{
 import { ChunkJob } from './types';
 
 const App: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video' | 'wutools'>('tts');
+    const [activeTab, setActiveTab] = useState<'tts' | 'filter' | 'settings' | 'video'>('tts');
     const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
     const [sharedChunks, setSharedChunks] = useState<ChunkJob[]>([]);
     const [sharedBgType, setSharedBgType] = useState<'image' | 'video' | 'color'>('color');
@@ -65,12 +65,7 @@ const App: React.FC = () => {
                             onClick={() => setActiveTab('video')} 
                             icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2-2 0 00-2 2v12a2 2 0 002 2z"></path></svg>}
                         />
-                        <TabButton 
-                            name="WuTools" 
-                            active={activeTab === 'wutools'} 
-                            onClick={() => setActiveTab('wutools')} 
-                            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>}
-                        />
+
                         <div className="w-px h-6 bg-[#262626] mx-2"></div>
                         <TabButton 
                             name="Cài đặt" 
@@ -134,25 +129,7 @@ const App: React.FC = () => {
                          )}
                      </div>
                  )}
-                 {activeTab === 'wutools' && (
-                     <div className="flex flex-col items-center justify-center h-[60vh] bg-[#121212] border border-[#262626] rounded-3xl text-center space-y-6">
-                         <div className="p-6 bg-blue-900/10 rounded-full border border-blue-900/10">
-                             <svg className="w-16 h-16 text-blue-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                         </div>
-                         <div className="space-y-2">
-                             <h2 className="text-xl font-bold text-white">Trang web từ chối nhúng</h2>
-                             <p className="text-gray-500 max-w-sm mx-auto text-sm">wutools.com không cho phép hiển thị bên trong một trang web khác (iFrame). Vui lòng mở trong tab mới.</p>
-                         </div>
-                         <a 
-                             href="https://wutools.com" 
-                             target="_blank" 
-                             rel="noopener noreferrer"
-                             className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-blue-500 transition-all active:scale-95 shadow-lg shadow-blue-600/20"
-                         >
-                             Mở WuTools
-                         </a>
-                     </div>
-                 )}
+
                  {activeTab === 'settings' && <Settings />}
             </main>
 

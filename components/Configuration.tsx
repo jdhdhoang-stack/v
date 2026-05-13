@@ -1,9 +1,12 @@
 
-import React, { useState, memo } from 'react';
+import React, { useState, memo, useCallback, useEffect, useMemo } from 'react';
 import type { SpeakerGroup } from '../src/types';
 import { FileUpload } from './FileUpload';
-import { Settings2, Wand2, Sparkles, Loader2 } from 'lucide-react';
+import { Settings2, Wand2, Sparkles, Loader2, Languages, ArrowRight, AlertTriangle, CheckCircle2, Clipboard } from 'lucide-react';
 import { aiService } from '../services/aiService';
+import { TextProcessor } from '../services/textProcessor';
+import { TranslationService, TranslationEngine } from '../services/translationService';
+import { SrtValidator, SrtError, SrtBlock } from '../services/srtValidator';
 
 interface ConfigurationProps {
     speaker: string;
@@ -25,6 +28,15 @@ interface ConfigurationProps {
     setRequestDelay: (value: number) => void;
 }
 
+const TARGET_LANGS = [
+    { label: 'Tiếng Việt', value: 'Vietnamese', code: 'vi' },
+    { label: 'Tiếng Anh', value: 'English', code: 'en' },
+    { label: 'Tiếng Trung', value: 'Chinese', code: 'zh' },
+    { label: 'Tiếng Nhật', value: 'Japanese', code: 'ja' },
+    { label: 'Tiếng Hàn', value: 'Korean', code: 'ko' },
+    { label: 'Tiếng Thái', value: 'Thai', code: 'th' },
+];
+
 export const Configuration: React.FC<ConfigurationProps> = memo(({
     speaker, setSpeaker, selectedCountry, onCountryChange, speakerGroups, isProcessing,
     onProcessQueue, onAddContent, pendingChunksCount,
@@ -33,7 +45,18 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
 }) => {
     const [textToAdd, setTextToAdd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const [showTranslate, setShowTranslate] = useState(false);
     const [isOptimizing, setIsOptimizing] = useState(false);
+    const [isTranslating, setIsTranslating] = useState(false);
+    const [translateProgress, setTranslateProgress] = useState(0);
+
+    // SRT states
+    const [srtErrors, setSrtErrors] = useState<SrtError[]>([]);
+    const [fixedSrtContent, setFixedSrtContent] = useState<string | null>(null);
+
+    // Translation settings
+    const [translationEngine, setTranslationEngine] = useState<TranslationEngine>(TranslationEngine.GEMINI);
+    const [targetLang, setTargetLang] = useState('Vietnamese');
 
     const handleAddTextJob = () => {
         if (!textToAdd.trim()) return;
@@ -54,8 +77,87 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
         }
     };
 
+    const isSrtLike = useMemo(() => {
+        return textToAdd.includes('-->') && textToAdd.split('\n').some(line => /\d{2}:\d{2}:\d{2}/.test(line));
+    }, [textToAdd]);
+
+    useEffect(() => {
+        if (isSrtLike) {
+            try {
+                const blocks = SrtValidator.parse(textToAdd);
+                const errors = SrtValidator.validate(blocks);
+                setSrtErrors(errors);
+            } catch (e) {
+                setSrtErrors([]);
+            }
+        } else {
+            setSrtErrors([]);
+            setFixedSrtContent(null);
+        }
+    }, [textToAdd, isSrtLike]);
+
+    const handleFixSrt = () => {
+        if (!textToAdd.trim()) return;
+        const blocks = SrtValidator.parse(textToAdd);
+        const fixedBlocks = SrtValidator.fix(blocks);
+        const fixedContent = SrtValidator.stringify(fixedBlocks);
+        setFixedSrtContent(fixedContent);
+    };
+
+    const handlePasteFixedSrt = () => {
+        if (fixedSrtContent) {
+            setTextToAdd(fixedSrtContent);
+            setFixedSrtContent(null);
+        }
+    };
+
+    const handleTranslate = async () => {
+        if (!textToAdd.trim() || isTranslating) return;
+        setIsTranslating(true);
+        setTranslateProgress(0);
+        
+        try {
+            if (isSrtLike) {
+                const isAI = translationEngine === TranslationEngine.GEMINI || translationEngine === TranslationEngine.DEEPSEEK;
+                const batchSize = isAI ? 30 : 8;
+                const concurrency = isAI ? 5 : 2;
+
+                const translated = await TextProcessor.translateSrtContent(
+                    textToAdd,
+                    async (chunk) => TranslationService.translate(chunk, {
+                        engine: translationEngine,
+                        targetLang: targetLang,
+                        sourceLang: 'auto',
+                    }),
+                    {
+                        batchSize,
+                        concurrency,
+                        onProgress: (progress) => setTranslateProgress(progress)
+                    }
+                );
+                setTextToAdd(translated);
+            } else {
+                const translated = await TranslationService.translate(textToAdd, {
+                    engine: translationEngine,
+                    targetLang: targetLang,
+                    sourceLang: 'auto',
+                });
+                setTextToAdd(translated);
+            }
+        } catch (error: any) {
+            alert(error.message || "Dịch thuật thất bại.");
+        } finally {
+            setIsTranslating(false);
+            setTranslateProgress(0);
+        }
+    };
+
     const handleFileAdded = (content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>) => {
-        onAddContent(content);
+        if (typeof content === 'string') {
+            setTextToAdd(content);
+        } else {
+            onAddContent(content);
+        }
     };
     
     const availableSpeakers = speakerGroups.find(g => g.country === selectedCountry)?.speakers || [];
@@ -106,67 +208,130 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                     </div>
                 </div>
 
-                <div>
+                <div className="grid grid-cols-2 gap-4">
                     <button 
                         onClick={() => setShowAdvanced(!showAdvanced)} 
-                        className="w-full flex items-center justify-between p-3 rounded-lg bg-[#1A1A1A] border border-[#262626] hover:bg-[#222222] transition-all group"
+                        className={`flex items-center justify-between p-3 rounded-lg border transition-all group ${showAdvanced ? 'bg-blue-900/20 border-blue-900/40 text-blue-400' : 'bg-[#1A1A1A] border-[#262626] text-gray-400 hover:bg-[#222222]'}`}
                     >
-                        <span className="flex items-center gap-2 text-gray-300 font-semibold text-xs">
-                             <Settings2 size={14} className="text-gray-500" />
-                            Tham số Nâng cao
+                        <span className="flex items-center gap-2 font-semibold text-[10px] uppercase tracking-wider">
+                             <Settings2 size={14} className={showAdvanced ? 'text-blue-400' : 'text-gray-500'} />
+                            Cấu hình
                         </span>
-                        <svg className={`h-4 w-4 text-gray-500 transition-transform duration-300 ${showAdvanced ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
-                    
-                    {showAdvanced && (
-                        <div className="mt-4 grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Luồng</label>
-                                <input 
-                                    type="number" value={isNaN(concurrentThreads) ? '' : concurrentThreads} 
-                                    onChange={e => {
-                                        const val = parseInt(e.target.value, 10);
-                                        setConcurrentThreads(isNaN(val) ? 0 : Math.min(500, Math.max(1, val)));
-                                    }}
-                                    className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
-                                />
-                            </div>
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Độ trễ (ms)</label>
-                                <input 
-                                    type="number" value={isNaN(requestDelay) ? '' : requestDelay} 
-                                    onChange={e => {
-                                        const val = parseInt(e.target.value, 10);
-                                        setRequestDelay(isNaN(val) ? 0 : val);
-                                    }}
-                                    className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
-                                />
-                            </div>
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Ký tự tối đa</label>
-                                <input 
-                                    type="number" value={isNaN(maxChars) ? '' : maxChars} 
-                                    onChange={e => {
-                                        const val = parseInt(e.target.value, 10);
-                                        setMaxChars(isNaN(val) ? 0 : val);
-                                    }}
-                                    className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
-                                />
-                            </div>
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Gộp tối thiểu</label>
-                                <input 
-                                    type="number" value={isNaN(minCharsToMerge) ? '' : minCharsToMerge} 
-                                    onChange={e => {
-                                        const val = parseInt(e.target.value, 10);
-                                        setMinCharsToMerge(isNaN(val) ? 0 : val);
-                                    }}
-                                    className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
-                                />
-                            </div>
-                        </div>
-                    )}
+
+                    <button 
+                        onClick={() => setShowTranslate(!showTranslate)} 
+                        className={`flex items-center justify-between p-3 rounded-lg border transition-all group ${showTranslate ? 'bg-purple-900/20 border-purple-900/40 text-purple-400' : 'bg-[#1A1A1A] border-[#262626] text-gray-400 hover:bg-[#222222]'}`}
+                    >
+                        <span className="flex items-center gap-2 font-semibold text-[10px] uppercase tracking-wider">
+                             <Languages size={14} className={showTranslate ? 'text-purple-400' : 'text-gray-500'} />
+                            Dịch SRT
+                        </span>
+                    </button>
                 </div>
+
+                {(showAdvanced || showTranslate) && (
+                    <div className="p-4 bg-[#1A1A1A] border border-[#262626] rounded-xl animate-in fade-in slide-in-from-top-2 duration-200">
+                        {showAdvanced && (
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Luồng</label>
+                                    <input 
+                                        type="number" value={isNaN(concurrentThreads) ? '' : concurrentThreads} 
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value, 10);
+                                            setConcurrentThreads(isNaN(val) ? 0 : Math.min(500, Math.max(1, val)));
+                                        }}
+                                        className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Độ trễ (ms)</label>
+                                    <input 
+                                        type="number" value={isNaN(requestDelay) ? '' : requestDelay} 
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value, 10);
+                                            setRequestDelay(isNaN(val) ? 0 : val);
+                                        }}
+                                        className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Ký tự tối đa</label>
+                                    <input 
+                                        type="number" value={isNaN(maxChars) ? '' : maxChars} 
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value, 10);
+                                            setMaxChars(isNaN(val) ? 0 : val);
+                                        }}
+                                        className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Gộp tối thiểu</label>
+                                    <input 
+                                        type="number" value={isNaN(minCharsToMerge) ? '' : minCharsToMerge} 
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value, 10);
+                                            setMinCharsToMerge(isNaN(val) ? 0 : val);
+                                        }}
+                                        className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-blue-500"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {showTranslate && (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Engine Dịch</label>
+                                        <select 
+                                            value={translationEngine}
+                                            onChange={(e) => setTranslationEngine(e.target.value as TranslationEngine)}
+                                            className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-purple-500"
+                                        >
+                                            <option value={TranslationEngine.GEMINI}>Gemini AI (Mượt)</option>
+                                            <option value={TranslationEngine.GOOGLE}>Google Translate</option>
+                                            <option value={TranslationEngine.BING}>Bing Translate</option>
+                                            <option value={TranslationEngine.DEEPSEEK}>Deepseek AI</option>
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider ml-1">Dịch sang</label>
+                                        <select 
+                                            value={targetLang}
+                                            onChange={(e) => setTargetLang(e.target.value)}
+                                            className="w-full bg-[#0D0D0D] border border-[#262626] rounded-lg p-2 text-sm text-gray-200 outline-none focus:border-purple-500"
+                                        >
+                                            {TARGET_LANGS.map(lang => (
+                                                <option key={lang.value} value={lang.value}>{lang.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={handleTranslate}
+                                    disabled={isTranslating || !textToAdd.trim()}
+                                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider text-white bg-purple-600 hover:bg-purple-700 transition-all disabled:opacity-50"
+                                >
+                                    {isTranslating ? (
+                                        <>
+                                            <Loader2 size={14} className="animate-spin" />
+                                            Đang dịch ({translateProgress}%)
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Languages size={14} />
+                                            Bắt đầu Dịch
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 <div className="space-y-4 pt-4 border-t border-[#262626]">
                     <div className="bg-[#1A1A1A] border border-[#262626] rounded-xl overflow-hidden focus-within:border-blue-500/50 transition-all relative">
@@ -178,17 +343,78 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                             className="w-full border-0 resize-none p-4 text-sm bg-transparent text-gray-200 placeholder-gray-500 focus:ring-0 leading-relaxed font-medium"
                         />
                         
-                        <div className="absolute right-4 top-4">
-                            <button
-                                onClick={handleOptimize}
-                                disabled={isOptimizing || !textToAdd.trim()}
-                                className="flex items-center gap-2 py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-900/20 border border-blue-900/40 hover:bg-blue-900/40 transition-all disabled:opacity-50"
-                                title="Sửa lỗi & Tối ưu bằng AI"
-                            >
-                                {isOptimizing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                                {isOptimizing ? 'Đang tối ưu...' : 'Tối ưu AI'}
-                            </button>
-                        </div>
+                        <div className="absolute right-4 top-4 flex gap-2">
+                             {isSrtLike && (
+                                <div className="flex gap-2">
+                                    {fixedSrtContent ? (
+                                        <button
+                                            onClick={handlePasteFixedSrt}
+                                            className="flex items-center gap-2 py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider text-yellow-400 bg-yellow-900/20 border border-yellow-900/40 hover:bg-yellow-900/40 transition-all animate-pulse"
+                                        >
+                                            <Clipboard size={12} />
+                                            Dán SRT Đã sửa
+                                        </button>
+                                    ) : (
+                                        srtErrors.length > 0 && (
+                                            <button
+                                                onClick={handleFixSrt}
+                                                className="flex items-center gap-2 py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider text-green-400 bg-green-900/20 border border-green-900/40 hover:bg-green-900/40 transition-all"
+                                                title="Tự động sửa lỗi SRT (thời gian, thứ tự)"
+                                            >
+                                                <Wand2 size={12} />
+                                                Sửa Lỗi ({srtErrors.length})
+                                            </button>
+                                        )
+                                    )}
+                                </div>
+                             )}
+                             <button
+                                 onClick={handleOptimize}
+                                 disabled={isOptimizing || !textToAdd.trim()}
+                                 className="flex items-center gap-2 py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-900/20 border border-blue-900/40 hover:bg-blue-900/40 transition-all disabled:opacity-50"
+                                 title="Sửa lỗi & Tối ưu bằng AI"
+                             >
+                                 {isOptimizing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                 {isOptimizing ? 'Đang tối ưu...' : 'Tối ưu AI'}
+                             </button>
+                         </div>
+
+                        {/* SRT Validation Feedback */}
+                        {isSrtLike && srtErrors.length > 0 && !fixedSrtContent && (
+                            <div className="mx-4 mb-4 p-3 bg-red-950/20 border border-red-900/30 rounded-lg flex items-start gap-3">
+                                <AlertTriangle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+                                <div>
+                                    <p className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-1">Cảnh báo lỗi SRT</p>
+                                    <ul className="space-y-1">
+                                        {srtErrors.slice(0, 3).map((err, i) => (
+                                            <li key={i} className="text-[9px] text-gray-400 leading-tight">
+                                                • {err.message} (Block {err.blockIndex + 1})
+                                            </li>
+                                        ))}
+                                        {srtErrors.length > 3 && (
+                                            <li className="text-[9px] text-gray-500 italic">...và {srtErrors.length - 3} lỗi khác</li>
+                                        )}
+                                    </ul>
+                                </div>
+                            </div>
+                        )}
+
+                        {isSrtLike && srtErrors.length === 0 && (
+                            <div className="mx-4 mb-4 p-2 bg-green-950/10 border border-green-900/20 rounded-lg flex items-center gap-2">
+                                <CheckCircle2 size={12} className="text-green-500" />
+                                <p className="text-[10px] font-bold text-green-400 uppercase tracking-widest">SRT Hợp lệ</p>
+                            </div>
+                        )}
+
+                        {fixedSrtContent && (
+                            <div className="mx-4 mb-4 p-3 bg-yellow-950/20 border border-yellow-900/30 rounded-lg flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <CheckCircle2 size={14} className="text-yellow-500" />
+                                    <p className="text-[10px] font-bold text-yellow-400 uppercase tracking-widest">Đã sửa {srtErrors.length} lỗi!</p>
+                                </div>
+                                <p className="text-[9px] text-gray-500 italic">Nhấn "Dán SRT Đã sửa" để cập nhật</p>
+                            </div>
+                        )}
 
                         <div className="flex items-center justify-between p-3 bg-[#121212] border-t border-[#262626]">
                             <FileUpload onFileProcessed={handleFileAdded} />
@@ -216,5 +442,3 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
 });
 
 Configuration.displayName = 'Configuration';
-
-

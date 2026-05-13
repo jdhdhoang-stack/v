@@ -1,21 +1,20 @@
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
+import { keyManager } from "./keyManager";
 
 class AIService {
-    private genAI: GoogleGenerativeAI;
-    private model: any;
+    private getAIInstance(): GoogleGenAI {
+        const apiKey = keyManager.getKey('translate');
+        return new GoogleGenAI({ apiKey });
+    }
 
-    constructor() {
-        // The API key is provided by the environment
-        const apiKey = process.env.GEMINI_API_KEY || "";
-        this.genAI = new GoogleGenerativeAI(apiKey);
-        this.model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    private getModel(): string {
+        return keyManager.getSettings().geminiModel || "gemini-2.0-flash";
     }
 
     public async optimizeTextForTTS(text: string): Promise<string> {
-        if (!process.env.GEMINI_API_KEY) {
-            throw new Error("Gemini API key is not configured.");
-        }
+        const ai = this.getAIInstance();
+        const modelName = this.getModel();
 
         const prompt = `
             Bạn là một chuyên gia biên tập nội dung cho Audio (TTS). 
@@ -32,11 +31,42 @@ class AIService {
         `;
 
         try {
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            return response.text().trim();
+            const response = await ai.models.generateContent({
+                model: modelName,
+                contents: prompt
+            });
+            return response.text || text;
         } catch (error) {
             console.error("AI Optimization failed:", error);
+            // Nếu lỗi do API Key, đánh dấu key lỗi
+            keyManager.markKeyAsBad(keyManager.getKey('translate'));
+            throw error;
+        }
+    }
+
+    public async translateText(text: string, targetLang: string, sourceLang: string = "auto"): Promise<string> {
+        const ai = this.getAIInstance();
+        const modelName = this.getModel();
+
+        const prompt = `
+            Dịch đoạn văn bản sau sang ${targetLang}${sourceLang !== 'auto' ? ` từ ${sourceLang}` : ''}.
+            Nếu là định dạng SRT, hãy giữ nguyên cấu trúc thời gian và số thứ tự, chỉ dịch nội dung văn bản.
+            Đảm bảo giọng văn tự nhiên, phù hợp với văn hóa của ngôn ngữ đích.
+            Trả về CHỈ văn bản đã dịch, không kèm giải thích.
+
+            Văn bản:
+            ${text}
+        `;
+
+        try {
+            const response = await ai.models.generateContent({
+                model: modelName,
+                contents: prompt
+            });
+            return response.text || text;
+        } catch (error) {
+            console.error("AI Translation failed:", error);
+            keyManager.markKeyAsBad(keyManager.getKey('translate'));
             throw error;
         }
     }

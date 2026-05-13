@@ -253,13 +253,27 @@ export const TextToSpeech: React.FC<{
         let newChunkJobs: ChunkJob[];
 
         if (typeof content === 'string') {
-            const textProcessor = new TextProcessor(maxChars, minCharsToMerge);
-            const textChunks = textProcessor.process(content);
-            newChunkJobs = textChunks.map(text => ({
-                id: uuidv4(),
-                text,
-                status: 'pending',
-            }));
+            const isSrt = content.includes('-->') && content.split('\n').some(line => /\d{2}:\d{2}:\d{2}/.test(line));
+            
+            if (isSrt) {
+                const srtItems = TextProcessor.parseSrt(content);
+                newChunkJobs = srtItems.map(item => ({
+                    id: uuidv4(),
+                    text: item.text,
+                    timestamp: item.timestamp,
+                    startTime: item.startTime,
+                    endTime: item.endTime,
+                    status: 'pending',
+                }));
+            } else {
+                const textProcessor = new TextProcessor(maxChars, minCharsToMerge);
+                const textChunks = textProcessor.process(content);
+                newChunkJobs = textChunks.map(text => ({
+                    id: uuidv4(),
+                    text,
+                    status: 'pending',
+                }));
+            }
         } else {
             newChunkJobs = content.map(chunk => ({
                 id: uuidv4(),

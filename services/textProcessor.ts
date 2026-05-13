@@ -1,5 +1,6 @@
 
 import * as mammoth from 'mammoth';
+import JSZip from 'jszip';
 
 export class TextProcessor {
     private maxChars: number;
@@ -132,8 +133,183 @@ export class TextProcessor {
         const ms = parseInt(parts[3], 10);
         return h * 3600 + m * 60 + s + ms / 1000;
     }
+
+    public static secondsToTimestamp(seconds: number): string {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        const ms = Math.floor((seconds % 1) * 1000);
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+    }
+
+    public static fixSrtContent(content: string): string {
+        // Robust SRT parser that can handle slightly broken formats
+        const blocks = content.trim().split(/\n\s*\n/);
+        const items: Array<{ index: number; start: number; end: number; text: string }> = [];
+
+        blocks.forEach((block) => {
+            const lines = block.trim().split(/\n/);
+            if (lines.length < 2) return;
+
+            // Find timing line
+            let timingLineIdx = -1;
+            const timingRegex = /(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})/;
+            
+            for (let i = 0; i < Math.min(3, lines.length); i++) {
+                if (timingRegex.test(lines[i])) {
+                    timingLineIdx = i;
+                    break;
+                }
+            }
+
+            if (timingLineIdx === -1) return;
+
+            const match = lines[timingLineIdx].match(timingRegex);
+            if (!match) return;
+
+            const startStr = match[1].replace('.', ',');
+            const endStr = match[2].replace('.', ',');
+            const start = this.parseTimestampToSeconds(startStr);
+            const end = this.parseTimestampToSeconds(endStr);
+            const textLines = lines.slice(timingLineIdx + 1);
+            const text = textLines.join('\n').trim();
+
+            if (text) {
+                items.push({ index: items.length + 1, start, end, text });
+            }
+        });
+
+        if (items.length === 0) return content;
+
+        // 1. Sort by start time
+        items.sort((a, b) => a.start - b.start);
+
+        // 2. Fix overlaps and durations
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            
+            // Ensure end >= start
+            if (item.end < item.start) {
+                item.end = item.start + 2.0; // Default 2s if end is before start
+            }
+
+            // Check overlap with next item
+            if (i < items.length - 1) {
+                const nextItem = items[i + 1];
+                if (item.end > nextItem.start) {
+                    // Reduce current end time to avoid overlap, but keep at least 0.1s duration
+                    item.end = Math.max(item.start + 0.1, nextItem.start - 0.01);
+                }
+            }
+        }
+
+        // 3. Re-build SRT string
+        return items.map((item, idx) => {
+            return `${idx + 1}\n${this.secondsToTimestamp(item.start)} --> ${this.secondsToTimestamp(item.end)}\n${item.text}`;
+        }).join('\n\n');
+    }
     
-    public static async processFromFile(file: File): Promise<string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>> {
+    public static async translateSrtContent(
+        content: string, 
+        translator: (text: string) => Promise<string>,
+        options: { batchSize?: number; concurrency?: number; onProgress?: (progress: number) => void } = {}
+    ): Promise<string> {
+        const { batchSize = 5, concurrency = 3, onProgress } = options;
+        const blocks = content.trim().split(/\n\s*\n/);
+        const translatedBlocks: string[] = new Array(Math.ceil(blocks.length / batchSize));
+        
+        const batches: string[][] = [];
+        for (let i = 0; i < blocks.length; i += batchSize) {
+            batches.push(blocks.slice(i, i + batchSize));
+        }
+
+        let completedBatches = 0;
+
+        // Process batches with limited concurrency
+        const processBatch = async (batchIdx: number) => {
+            const batch = batches[batchIdx];
+            const batchContent = batch.join('\n\n');
+            
+            try {
+                const translatedBatch = await translator(batchContent);
+                translatedBlocks[batchIdx] = translatedBatch;
+            } catch (error) {
+                console.error(`Dịch batch ${batchIdx} thất bại:`, error);
+                translatedBlocks[batchIdx] = batchContent; // Giữ nguyên nếu lỗi
+            }
+            
+            completedBatches++;
+            if (onProgress) {
+                onProgress(Math.floor((completedBatches / batches.length) * 100));
+            }
+        };
+
+        // Run batches in parallel batches
+        for (let i = 0; i < batches.length; i += concurrency) {
+            const currentBatchGroup = [];
+            for (let j = 0; j < concurrency && (i + j) < batches.length; j++) {
+                currentBatchGroup.push(processBatch(i + j));
+            }
+            await Promise.all(currentBatchGroup);
+        }
+        
+        return translatedBlocks.join('\n\n');
+    }
+
+    public static parseSrt(content: string): Array<{ text: string; startTime: number; endTime: number; timestamp: string }> {
+        // SRT Parser: Sequence (optional), Timing, Text, empty line
+        const srtRegex = /(?:\d+\r?\n)?(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
+        const items: Array<{ text: string; startTime: number; endTime: number; timestamp: string }> = [];
+        let match;
+        
+        while ((match = srtRegex.exec(content)) !== null) {
+            const start = match[1];
+            const end = match[2];
+            const text = match[3].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
+            if (text) {
+                items.push({ 
+                    text, 
+                    startTime: this.parseTimestampToSeconds(start),
+                    endTime: this.parseTimestampToSeconds(end),
+                    timestamp: start 
+                });
+            }
+        }
+        
+        if (items.length === 0) {
+            // Fallback: try simple split if regex fails
+            const lines = content.split(/\r?\n\r?\n/);
+            lines.forEach(block => {
+                const blockContent = block.trim();
+                if (!blockContent) return;
+                
+                const timingRegex = /(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/;
+                const timingMatch = blockContent.match(timingRegex);
+                if (timingMatch) {
+                    const startTimeStr = timingMatch[1];
+                    const endTimeStr = timingMatch[2];
+                    
+                    const linesInBlock = blockContent.split(/\r?\n/);
+                    const timingLineIdx = linesInBlock.findIndex(line => timingRegex.test(line));
+                    
+                    if (timingLineIdx !== -1 && timingLineIdx + 1 < linesInBlock.length) {
+                        const text = linesInBlock.slice(timingLineIdx + 1).join(' ').replace(/<[^>]*>/g, '').trim();
+                        if (text) {
+                            items.push({ 
+                                text, 
+                                startTime: this.parseTimestampToSeconds(startTimeStr),
+                                endTime: this.parseTimestampToSeconds(endTimeStr),
+                                timestamp: startTimeStr 
+                            });
+                        }
+                    }
+                }
+            });
+        }
+        return items;
+    }
+
+    public static async processFromFile(file: File): Promise<string> {
         const extension = file.name.split('.').pop()?.toLowerCase();
         
         return new Promise((resolve, reject) => {
@@ -149,57 +325,7 @@ export class TextProcessor {
             } else if (extension === 'srt') {
                 reader.onload = (e) => {
                     const content = e.target?.result as string;
-                    // SRT Parser: Sequence (optional), Timing, Text, empty line
-                    const srtRegex = /(?:\d+\r?\n)?(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
-                    const items: Array<{ text: string; startTime: number; endTime: number; timestamp: string }> = [];
-                    let match;
-                    
-                    while ((match = srtRegex.exec(content)) !== null) {
-                        const start = match[1];
-                        const end = match[2];
-                        const text = match[3].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
-                        if (text) {
-                            items.push({ 
-                                text, 
-                                startTime: this.parseTimestampToSeconds(start),
-                                endTime: this.parseTimestampToSeconds(end),
-                                timestamp: start 
-                            });
-                        }
-                    }
-                    
-                    if (items.length === 0) {
-                        // Fallback: try simple split if regex fails
-                        const lines = content.split(/\r?\n\r?\n/);
-                        lines.forEach(block => {
-                            const blockContent = block.trim();
-                            if (!blockContent) return;
-                            
-                            const timingRegex = /(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/;
-                            const timingMatch = blockContent.match(timingRegex);
-                            if (timingMatch) {
-                                const startTimeStr = timingMatch[1];
-                                const endTimeStr = timingMatch[2];
-                                
-                                const linesInBlock = blockContent.split(/\r?\n/);
-                                const timingLineIdx = linesInBlock.findIndex(line => timingRegex.test(line));
-                                
-                                if (timingLineIdx !== -1 && timingLineIdx + 1 < linesInBlock.length) {
-                                    const text = linesInBlock.slice(timingLineIdx + 1).join(' ').replace(/<[^>]*>/g, '').trim();
-                                    if (text) {
-                                        items.push({ 
-                                            text, 
-                                            startTime: this.parseTimestampToSeconds(startTimeStr),
-                                            endTime: this.parseTimestampToSeconds(endTimeStr),
-                                            timestamp: startTimeStr 
-                                        });
-                                    }
-                                }
-                            }
-                        });
-                    }
-
-                    resolve(items);
+                    resolve(content);
                 };
                 reader.readAsText(file);
             } else if (extension === 'docx') {
@@ -213,6 +339,65 @@ export class TextProcessor {
                         resolve(result.value);
                     } catch (err) {
                         reject(new Error('Phân tích file .docx thất bại.'));
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            } else if (extension === 'epub') {
+                reader.onload = async (e) => {
+                    try {
+                        const arrayBuffer = e.target?.result as ArrayBuffer;
+                        const zip = await JSZip.loadAsync(arrayBuffer);
+                        
+                        // 1. Find the rootfile in container.xml
+                        const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+                        if (!containerXml) throw new Error('Không tìm thấy container.xml');
+                        
+                        const rootfileMatch = containerXml.match(/full-path="([^"]+)"/);
+                        if (!rootfileMatch) throw new Error('Không xác định được root file');
+                        
+                        const opfPath = rootfileMatch[1];
+                        const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+                        const opfXml = await zip.file(opfPath)?.async('string');
+                        if (!opfXml) throw new Error('Không thể đọc file .opf');
+                        
+                        // 2. Parse OPF to get manifest and spine
+                        const parser = new DOMParser();
+                        const xmlDoc = parser.parseFromString(opfXml, "text/xml");
+                        
+                        const items: { [id: string]: string } = {};
+                        const manifestItems = xmlDoc.getElementsByTagName('item');
+                        for (let i = 0; i < manifestItems.length; i++) {
+                            const item = manifestItems[i];
+                            const id = item.getAttribute('id');
+                            const href = item.getAttribute('href');
+                            if (id && href) items[id] = href;
+                        }
+                        
+                        const spineItems = xmlDoc.getElementsByTagName('itemref');
+                        let fullText = '';
+                        
+                        for (let i = 0; i < spineItems.length; i++) {
+                            const idref = spineItems[i].getAttribute('idref');
+                            if (idref && items[idref]) {
+                                const filePath = opfDir + items[idref];
+                                const htmlContent = await zip.file(filePath)?.async('string');
+                                if (htmlContent) {
+                                    // Basic HTML to TXT conversion
+                                    const htmlDoc = parser.parseFromString(htmlContent, 'text/html');
+                                    // Remove scripts and styles
+                                    const scripts = htmlDoc.getElementsByTagName('script');
+                                    const styles = htmlDoc.getElementsByTagName('style');
+                                    while (scripts.length > 0) scripts[0].parentNode?.removeChild(scripts[0]);
+                                    while (styles.length > 0) styles[0].parentNode?.removeChild(styles[0]);
+                                    
+                                    fullText += (htmlDoc.body.textContent || htmlDoc.body.innerText || '') + '\n\n';
+                                }
+                            }
+                        }
+                        
+                        resolve(fullText.trim());
+                    } catch (err) {
+                        reject(new Error(`Phân tích file .epub thất bại: ${(err as Error).message}`));
                     }
                 };
                 reader.readAsArrayBuffer(file);
