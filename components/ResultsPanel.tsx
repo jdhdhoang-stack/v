@@ -20,11 +20,13 @@ interface ResultsPanelProps {
     failedChunksCount: number;
     remainingChunksCount: number;
     totalChunksCount: number;
+    onMergeAudio: () => void;
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({ 
     chunks, processingState, mergedAudioUrls, isMerging, mergeProgress, onCancel, removeChunk, onClearQueue, onDownloadAll,
-    onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount
+    onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount,
+    onMergeAudio
 }) => {
     return (
         <div className="bg-[#121212] border border-[#262626] rounded-xl shadow-sm h-full flex flex-col overflow-hidden text-gray-200">
@@ -46,6 +48,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {processingState === 'idle' && successfulChunksCount > 0 && !isMerging && (
+                             <button
+                                onClick={onMergeAudio}
+                                className={`flex items-center gap-2 py-1.5 px-4 rounded-lg text-xs font-bold uppercase transition-all active:scale-95 shadow-lg ${
+                                    mergedAudioUrls.length === 0 
+                                    ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-600/20' 
+                                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700'
+                                }`}
+                                title={mergedAudioUrls.length === 0 ? "Gộp các phần đã hoàn thành" : "Gộp lại tất cả audio"}
+                            >
+                                <Layers size={14} />
+                                {mergedAudioUrls.length === 0 ? 'Gộp Audio' : 'Gộp Lại'}
+                            </button>
+                        )}
                         {processingState === 'idle' && failedChunksCount > 0 && (
                              <button
                                 onClick={onRetryAllFailed}

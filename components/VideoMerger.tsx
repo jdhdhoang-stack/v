@@ -1,7 +1,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Video, Image as ImageIcon, Download, Loader2, X, Play, Pause, Film, Settings, Maximize2, Type, Camera } from 'lucide-react';
+import { Video, Image as ImageIcon, Download, Loader2, X, Play, Pause, Film, Settings, Maximize2, Type, Camera, ChevronUp, ChevronDown, Trash2, AlertCircle, CheckCircle2, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+interface SrtError {
+    index: number;
+    type: 'order' | 'overlap' | 'duration' | 'text_contains_timeline';
+    message: string;
+}
 
 interface BlurConfig {
     enabled: boolean;
@@ -41,13 +47,21 @@ interface WatermarkConfig {
 
 import { ChunkJob } from '../src/types';
 
+interface SourceItem {
+    id: string;
+    type: 'image' | 'video' | 'audio';
+    url: string;
+    name: string;
+    duration?: number;
+}
+
 interface VideoMergerProps {
     audioUrl: string;
     chunks?: ChunkJob[];
     onClose?: () => void;
     initialBgType?: 'image' | 'video' | 'color';
-    initialBgSource?: string | null;
-    onBgChange?: (type: 'image' | 'video' | 'color', source: string | null) => void;
+    initialBgSources?: SourceItem[];
+    onBgChange?: (type: 'image' | 'video' | 'color', sources: SourceItem[]) => void;
     onAudioChange?: (url: string, chunks: ChunkJob[]) => void;
 }
 
@@ -59,12 +73,15 @@ const STORAGE_KEY_WATERMARK = 'vocalis_watermark_config';
 export const VideoMerger: React.FC<VideoMergerProps> = ({ 
     audioUrl, chunks, onClose, 
     initialBgType = 'color', 
-    initialBgSource = null,
+    initialBgSources = [],
     onBgChange,
     onAudioChange
 }) => {
     const [bgType, setBgType] = useState<'image' | 'video' | 'color'>(initialBgType);
-    const [bgSource, setBgSource] = useState<string | null>(initialBgSource);
+    const [bgSources, setBgSources] = useState<SourceItem[]>(initialBgSources);
+    const [audioSources, setAudioSources] = useState<SourceItem[]>([]);
+    const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
+    const [currentAudioIndex, setCurrentAudioIndex] = useState(0);
     const [imageLoaded, setImageLoaded] = useState(false);
     const [isRendering, setIsRendering] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -72,6 +89,82 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const [settingsTab, setSettingsTab] = useState<'blur_subs' | 'branding'>('blur_subs');
     const [customChunks, setCustomChunks] = useState<ChunkJob[] | null>(null);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
+    const [srtErrors, setSrtErrors] = useState<SrtError[]>([]);
+    const [lastUploadedSrt, setLastUploadedSrt] = useState<string | null>(null);
+
+    const validateSrt = (chunks: ChunkJob[]) => {
+        const errors: SrtError[] = [];
+        const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/;
+
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const startTime = chunk.startTime || 0;
+            const endTime = chunk.endTime || 0;
+
+            // 1. Durations or overlaps
+            if (endTime < startTime) {
+                errors.push({
+                    index: i,
+                    type: 'duration',
+                    message: `Dòng #${i + 1}: Thời gian kết thúc trước thời gian bắt đầu.`
+                });
+            }
+
+            if (i > 0) {
+                const prevChunk = chunks[i-1];
+                if (startTime < (prevChunk.endTime || 0)) {
+                    errors.push({
+                        index: i,
+                        type: 'overlap',
+                        message: `Dòng #${i + 1}: Thời gian bắt đầu chồng chéo với dòng trước.`
+                    });
+                }
+            }
+
+            // 2. Timeline inside text
+            if (timecodeRegex.test(chunk.text)) {
+                errors.push({
+                    index: i,
+                    type: 'text_contains_timeline',
+                    message: `Dòng #${i + 1}: Nội dung chứa ký tự giống timeline.`
+                });
+            }
+        }
+        return errors;
+    };
+
+    const repairSrt = () => {
+        if (!customChunks) return;
+        
+        let repaired = [...customChunks].map(c => ({...c}));
+        const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/;
+
+        for (let i = 0; i < repaired.length; i++) {
+            // Fix text containing timeline
+            if (timecodeRegex.test(repaired[i].text)) {
+                repaired[i].text = repaired[i].text.replace(/\d{2}:\d{2}:\d{2}[.,]\d{3}.*-->.*\d{2}:\d{2}:\d{2}[.,]\d{3}/g, '').trim();
+                repaired[i].text = repaired[i].text.replace(/\d{2}:\d{2}:\d{2}[.,]\d{3}/g, '').trim();
+            }
+
+            // Fix duration
+            if ((repaired[i].endTime || 0) < (repaired[i].startTime || 0)) {
+                repaired[i].endTime = (repaired[i].startTime || 0) + 2; // Default 2s duration
+            }
+
+            // Fix overlaps
+            if (i > 0) {
+                if ((repaired[i].startTime || 0) < (repaired[i-1].endTime || 0)) {
+                    repaired[i].startTime = (repaired[i-1].endTime || 0) + 0.1;
+                    if ((repaired[i].endTime || 0) < (repaired[i].startTime || 0)) {
+                        repaired[i].endTime = (repaired[i].startTime || 0) + 2;
+                    }
+                }
+            }
+        }
+
+        setCustomChunks(repaired);
+        setSrtErrors([]);
+    };
     // Handle audio graph reset when background changes
     useEffect(() => {
         // Reset audio context cache if bgType changes to/from video
@@ -226,29 +319,42 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     }, [logoSource]);
 
     useEffect(() => {
-        onBgChange?.(bgType, bgSource);
-    }, [bgType, bgSource]);
+        onBgChange?.(bgType, bgSources);
+    }, [bgType, bgSources]);
+
+    const activeAudioUrl = audioSources.length > 0 && audioSources[currentAudioIndex] 
+        ? audioSources[currentAudioIndex].url 
+        : audioUrl;
+
+    const activeSource = bgSources[currentSourceIndex];
 
     useEffect(() => {
-        if (bgType === 'image' && bgSource) {
+        if (audioRef.current) {
+            audioRef.current.src = activeAudioUrl;
+            audioRef.current.load();
+        }
+    }, [activeAudioUrl]);
+
+    useEffect(() => {
+        if (bgType === 'image' && activeSource?.url) {
             const img = new Image();
             img.onload = () => {
                 bgImageRef.current = img;
                 setImageLoaded(true);
             };
             img.onerror = () => {
-                console.error("Image failed to load:", bgSource);
+                console.error("Image failed to load:", activeSource.url);
                 setImageLoaded(false);
             };
-            img.src = bgSource;
+            img.src = activeSource.url;
         } else {
             setImageLoaded(false);
         }
-    }, [bgSource, bgType]);
+    }, [activeSource?.url, bgType]);
 
     useEffect(() => {
-        if (bgType === 'video' && bgSource && videoRef.current) {
-            videoRef.current.src = bgSource;
+        if (bgType === 'video' && activeSource?.url && videoRef.current) {
+            videoRef.current.src = activeSource.url;
             videoRef.current.load();
             
             videoRef.current.onloadedmetadata = () => {
@@ -257,43 +363,83 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                 }
             };
 
-            videoRef.current.currentTime = 0.5; // Start a bit later to avoid potential black frames at start
-            videoRef.current.onseeked = () => {
-                // Ensure first frame is drawn
-            };
+            videoRef.current.currentTime = 0; 
         }
-    }, [bgSource, bgType]);
+    }, [activeSource?.url, bgType]);
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
 
-        // Revoke old URL if exists to prevent memory leaks
-        if (bgSource && bgSource.startsWith('blob:')) {
-            URL.revokeObjectURL(bgSource);
-        }
+        const newSources: SourceItem[] = [];
+        const isVideo = e.target.accept?.includes('video');
+        const isImage = e.target.accept?.includes('image');
 
-        const url = URL.createObjectURL(file);
-        const accept = e.target.accept || '';
-        
-        if (accept.includes('image')) {
-            setBgType('image');
-            setBgSource(url);
-        } else if (accept.includes('video')) {
-            setBgType('video');
-            setBgSource(url);
-        } else {
-            // Fallback
-            const type = file.type || '';
-            const name = file.name.toLowerCase();
-            if (type.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp)$/)) {
-                setBgType('image');
-                setBgSource(url);
-            } else if (type.startsWith('video/') || name.match(/\.(mp4|webm|ogg|mov)$/)) {
-                setBgType('video');
-                setBgSource(url);
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const url = URL.createObjectURL(file);
+            let type: 'image' | 'video' | 'audio' = isVideo ? 'video' : 'image';
+            
+            if (!isVideo && !isImage) {
+                const name = file.name.toLowerCase();
+                const mime = file.type || '';
+                if (mime.startsWith('video/') || name.match(/\.(mp4|webm|ogg|mov)$/)) {
+                    type = 'video';
+                } else if (mime.startsWith('audio/') || name.match(/\.(mp3|wav|ogg|m4a|aac)$/)) {
+                    type = 'audio';
+                } else {
+                    type = 'image';
+                }
             }
+
+            let duration = 0;
+            if (type === 'video' || type === 'audio') {
+                try {
+                    duration = await new Promise((resolve) => {
+                        const temp = document.createElement(type);
+                        temp.src = url;
+                        temp.onloadedmetadata = () => resolve(temp.duration);
+                        temp.onerror = () => resolve(0);
+                    });
+                } catch(e) { console.warn("Could not get duration", e); }
+            }
+
+            newSources.push({
+                id: Math.random().toString(36).substring(2, 9),
+                type,
+                url,
+                name: file.name,
+                duration
+            });
         }
+
+        if (newSources.length > 0) {
+            setBgType(newSources[0].type === 'audio' ? 'video' : newSources[0].type as any);
+            setBgSources(prev => [...prev, ...newSources.filter(s => s.type !== 'audio')]);
+        }
+    };
+
+    const removeSource = (id: string) => {
+        setBgSources(prev => {
+            const filtered = prev.filter(s => s.id !== id);
+            // Cleanup URLs
+            const removed = prev.find(s => s.id === id);
+            if (removed?.url.startsWith('blob:')) URL.revokeObjectURL(removed.url);
+            return filtered;
+        });
+        if (currentSourceIndex >= bgSources.length - 1 && currentSourceIndex > 0) {
+            setCurrentSourceIndex(prev => prev - 1);
+        }
+    };
+
+    const moveSource = (index: number, direction: 'up' | 'down') => {
+        if (direction === 'up' && index === 0) return;
+        if (direction === 'down' && index === bgSources.length - 1) return;
+
+        const newSources = [...bgSources];
+        const targetIndex = direction === 'up' ? index - 1 : index + 1;
+        [newSources[index], newSources[targetIndex]] = [newSources[targetIndex], newSources[index]];
+        setBgSources(newSources);
     };
 
     const layoutRef = useRef<{ 
@@ -363,7 +509,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     }, [imageLoaded, bgType]);
 
     useEffect(() => {
-        if (bgType === 'video' && bgSource) {
+        if (bgType === 'video' && activeSource?.url) {
             const vid = videoRef.current;
             if (vid) {
                 const checkMetadata = () => {
@@ -375,7 +521,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                 vid.addEventListener('loadedmetadata', checkMetadata);
             }
         }
-    }, [bgSource, bgType]);
+    }, [activeSource?.url, bgType]);
 
     const lastChunkIndexRef = useRef(0);
 
@@ -386,15 +532,28 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         if (!canvas || !ctx) return;
 
         // Draw Background
-        const layout = layoutRef.current;
-        if (layout) {
-            const source = bgType === 'image' ? bgImageRef.current : videoRef.current;
-            if (source) {
-                ctx.drawImage(source as CanvasImageSource, layout.offsetX, layout.offsetY, layout.drawWidth, layout.drawHeight);
+        const source = bgType === 'image' ? bgImageRef.current : videoRef.current;
+        let layout = layoutRef.current;
+        
+        // Try to update layout if it's missing but we have source metadata
+        if (!layout && source) {
+            const sw = bgType === 'image' ? (source as HTMLImageElement).naturalWidth : (source as HTMLVideoElement).videoWidth;
+            const sh = bgType === 'image' ? (source as HTMLImageElement).naturalHeight : (source as HTMLVideoElement).videoHeight;
+            if (sw > 0 && sh > 0) {
+                updateLayout();
+                layout = layoutRef.current;
             }
-        } else {
+        }
+
+        if (layout && source) {
+            ctx.drawImage(source as CanvasImageSource, layout.offsetX, layout.offsetY, layout.drawWidth, layout.drawHeight);
+        } else if (bgType === 'color') {
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else {
+            // During transitions, don't clear! Let the previous frame stay to avoid flickering to black
+            //ctx.fillStyle = '#0a0a0a';
+            //ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
         // Apply Blur
@@ -434,6 +593,19 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         }
 
         const audio = audioRef.current;
+
+        // Audio source switching logic
+        if (audioSources.length > 0 && audio && !audio.paused && audio.ended) {
+            if (currentAudioIndex < audioSources.length - 1) {
+                const nextAudioIndex = currentAudioIndex + 1;
+                setCurrentAudioIndex(nextAudioIndex);
+                if (isRendering) {
+                    audio.src = audioSources[nextAudioIndex].url;
+                    audio.load();
+                    audio.play().catch(console.error);
+                }
+            }
+        }
 
         // Draw Watermark Text
         if (watermarkConfig.enabled && watermarkConfig.text) {
@@ -515,7 +687,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             let textToDraw = '';
             if (activeChunk) {
                 textToDraw = activeChunk.text;
-            } else if (!bgSource && !audio.paused) {
+            } else if (bgSources.length === 0 && !audio.paused) {
                 textToDraw = 'Vui lòng chọn ảnh/video nền...';
             }
 
@@ -523,6 +695,29 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                 ctx.fillText(textToDraw, canvas.width / 2, canvas.height - subtitleConfig.bottomMargin);
             }
             ctx.restore();
+        }
+
+        // Sequential background logic
+        if (bgType === 'video' && videoRef.current && !videoRef.current.paused && videoRef.current.ended) {
+            if (currentSourceIndex < bgSources.length - 1) {
+                const nextIndex = currentSourceIndex + 1;
+                setCurrentSourceIndex(nextIndex);
+                // Pre-play next video if rendering
+                if (isRendering && videoRef.current) {
+                    const nextUrl = bgSources[nextIndex].url;
+                    videoRef.current.src = nextUrl;
+                    videoRef.current.load();
+                    videoRef.current.play().catch(console.error);
+                }
+            } else {
+                // Loop back to start if it's the last video
+                setCurrentSourceIndex(0);
+                if (isRendering && videoRef.current) {
+                    videoRef.current.src = bgSources[0].url;
+                    videoRef.current.load();
+                    videoRef.current.play().catch(console.error);
+                }
+            }
         }
 
         requestRef.current = requestAnimationFrame(render);
@@ -631,17 +826,37 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         // Start recorder ONLY AFTER media is confirmed playing
         recorder.start();
 
+        const totalAudioDuration = audioSources.length > 0 
+            ? audioSources.reduce((acc, s) => acc + (s.duration || 0), 0)
+            : audio.duration || 0;
+
         const updateProgress = () => {
-            if (audio.duration) {
-                const p = (audio.currentTime / audio.duration) * 100;
-                setProgress(p);
+            if (totalAudioDuration > 0) {
+                let playedDuration = 0;
+                if (audioSources.length > 0) {
+                    for (let i = 0; i < currentAudioIndex; i++) {
+                        playedDuration += audioSources[i].duration || 0;
+                    }
+                    playedDuration += audio.currentTime;
+                } else {
+                    playedDuration = audio.currentTime;
+                }
+                
+                const p = (playedDuration / totalAudioDuration) * 100;
+                setProgress(Math.min(p, 99.9)); // Keep at 99.9 until done
+                
                 if (audio.ended) {
-                    recorder.stop();
-                    if (videoRef.current) videoRef.current.pause();
-                    return;
+                    if (audioSources.length > 0 && currentAudioIndex < audioSources.length - 1) {
+                        // Switching is now handled by the render loop switching logic
+                    } else {
+                        recorder.stop();
+                        if (videoRef.current) videoRef.current.pause();
+                        setProgress(100);
+                        return;
+                    }
                 }
             }
-            requestAnimationFrame(updateProgress);
+            if (isRendering) requestAnimationFrame(updateProgress);
         };
         updateProgress();
     };
@@ -653,7 +868,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             isLoopingRef.current = false;
             if (requestRef.current) cancelAnimationFrame(requestRef.current);
         };
-    }, [bgSource, bgType, blurConfig, subtitleConfig, logoConfig, logoSource, watermarkConfig, imageLoaded, isRendering, displayChunks]);
+    }, [bgSources, bgType, blurConfig, subtitleConfig, logoConfig, logoSource, watermarkConfig, imageLoaded, isRendering, displayChunks, audioSources, currentAudioIndex]);
 
     return (
         <div className={onClose ? "fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4" : "w-full"}>
@@ -688,15 +903,15 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                         <ImageIcon size={28} className="text-gray-600 group-hover:text-blue-400" />
                                     </div>
                                     <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest">Ảnh Nền</span>
-                                    {bgType === 'image' && bgSource && <div className="absolute right-4 top-4 w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
+                                    {bgType === 'image' && bgSources.length > 0 && <div className="absolute right-4 top-4 w-2 h-2 bg-blue-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>}
                                 </label>
                                 <label className="cursor-pointer group relative overflow-hidden h-32 bg-[#141414] border border-[#262626] rounded-2xl flex flex-col items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
-                                    <input type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
+                                    <input type="file" multiple accept="video/*" className="hidden" onChange={handleFileChange} />
                                     <div className="p-3 bg-purple-950/20 rounded-full group-hover:scale-110 transition-transform">
                                         <Video size={28} className="text-gray-600 group-hover:text-purple-400" />
                                     </div>
                                     <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest">Video Nền</span>
-                                    {bgType === 'video' && bgSource && <div className="absolute right-4 top-4 w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>}
+                                    {bgType === 'video' && bgSources.length > 0 && <div className="absolute right-4 top-4 w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>}
                                 </label>
                                 <label className="cursor-pointer group relative overflow-hidden h-32 bg-[#141414] border border-[#262626] rounded-2xl flex flex-col items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
                                     <input 
@@ -720,7 +935,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                 </label>
                             </div>
 
-                            {bgType === 'video' && bgSource && (
+                            {bgType === 'video' && bgSources.length > 0 && (
                                 <div className="p-4 bg-[#141414] border border-[#262626] rounded-2xl space-y-2">
                                     <div className="flex justify-between items-center">
                                         <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Âm thanh Video gốc: {Math.round(bgAudioVolume * 100)}%</span>
@@ -734,38 +949,226 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                 </div>
                             )}
 
+                            {bgSources.length > 0 && (
+                                <div className="space-y-3">
+                                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] flex items-center justify-between">
+                                        <span>Danh sách tài nguyên ({bgSources.length})</span>
+                                        <button 
+                                            onClick={() => {
+                                                bgSources.forEach(s => { if(s.url.startsWith('blob:')) URL.revokeObjectURL(s.url); });
+                                                setBgSources([]);
+                                            }}
+                                            className="text-red-500 hover:text-red-400 transition-colors"
+                                        >
+                                            Xóa hết
+                                        </button>
+                                    </label>
+                                    <div className="space-y-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+                                        {bgSources.map((source, index) => (
+                                            <div 
+                                                key={source.id} 
+                                                className={`p-3 rounded-xl border flex items-center gap-3 group transition-all cursor-pointer ${
+                                                    currentSourceIndex === index 
+                                                    ? 'bg-blue-600/10 border-blue-500/50 active-glow' 
+                                                    : 'bg-[#141414] border-[#262626] hover:border-gray-600'
+                                                }`}
+                                                onClick={() => setCurrentSourceIndex(index)}
+                                            >
+                                                <div className="w-8 h-8 rounded-lg bg-[#222] flex items-center justify-center text-[10px] font-bold text-gray-400">
+                                                    #{index + 1}
+                                                </div>
+                                                <div className="flex-grow min-w-0">
+                                                    <p className="text-[11px] font-bold text-white truncate">{source.name}</p>
+                                                    <div className="flex items-center gap-2 mt-0.5">
+                                                        <span className="text-[9px] text-gray-500 uppercase font-black">{source.type}</span>
+                                                        {currentSourceIndex === index && <span className="text-[9px] text-blue-400 font-bold uppercase animate-pulse">Đang dùng</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); moveSource(index, 'up'); }}
+                                                        disabled={index === 0}
+                                                        className="p-1 hover:bg-[#262626] rounded disabled:opacity-20"
+                                                    >
+                                                        <ChevronUp size={14} className="text-gray-400" />
+                                                    </button>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); moveSource(index, 'down'); }}
+                                                        disabled={index === bgSources.length - 1}
+                                                        className="p-1 hover:bg-[#262626] rounded disabled:opacity-20"
+                                                    >
+                                                        <ChevronDown size={14} className="text-gray-400" />
+                                                    </button>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); removeSource(source.id); }}
+                                                        className="p-1 hover:bg-red-900/20 rounded group/del"
+                                                    >
+                                                        <Trash2 size={14} className="text-gray-500 group-hover/del:text-red-500 transition-colors" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <label className="md:col-span-1 cursor-pointer group relative overflow-hidden h-16 bg-[#141414] border border-[#262626] rounded-2xl flex items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
-                                    <input type="file" accept="audio/*" className="hidden" onChange={(e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file && onAudioChange) {
-                                            const url = URL.createObjectURL(file);
-                                            onAudioChange(url, []); // reset chunks since it's external
-                                            setCustomChunks(null);
-                                        }
-                                    }} />
-                                    <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest flex items-center gap-2">
-                                        Đổi Âm Thanh
-                                    </span>
-                                </label>
-                                <label className="md:col-span-1 cursor-pointer group relative overflow-hidden h-16 bg-[#141414] border border-[#262626] rounded-2xl flex items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
-                                    <input type="file" accept=".srt" className="hidden" onChange={(e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) {
-                                            const reader = new FileReader();
-                                            reader.onload = (e) => {
-                                                const text = e.target?.result as string;
-                                                const parsed = parseSrtToChunks(text);
-                                                setCustomChunks(parsed);
-                                            };
-                                            reader.readAsText(file);
-                                        }
-                                    }} />
-                                    <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest flex items-center gap-2">
-                                        Tải Phụ Đề SRT
-                                    </span>
-                                    {customChunks && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-2 h-2 bg-green-500 rounded-full"></div>}
-                                </label>
+                                    <label className="md:col-span-1 cursor-pointer group relative overflow-hidden h-16 bg-[#141414] border border-[#262626] rounded-2xl flex items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
+                                        <input type="file" multiple accept="audio/*" className="hidden" onChange={async (e) => {
+                                            const files = e.target.files;
+                                            if (!files) return;
+                                            const newSources: SourceItem[] = [];
+                                            for (let i = 0; i < files.length; i++) {
+                                                const file = files[i];
+                                                const url = URL.createObjectURL(file);
+                                                
+                                                let duration = 0;
+                                                try {
+                                                    duration = await new Promise((resolve) => {
+                                                        const temp = new Audio();
+                                                        temp.src = url;
+                                                        temp.onloadedmetadata = () => resolve(temp.duration);
+                                                        temp.onerror = () => resolve(0);
+                                                    });
+                                                } catch(e) { console.warn("Could not get duration", e); }
+
+                                                newSources.push({
+                                                    id: Math.random().toString(36).substring(2, 9),
+                                                    type: 'audio',
+                                                    url,
+                                                    name: file.name,
+                                                    duration
+                                                });
+                                            }
+                                            setAudioSources(prev => [...prev, ...newSources]);
+                                        }} />
+                                        <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest flex items-center gap-2">
+                                            {audioSources.length > 0 ? `Thêm Âm Thanh (${audioSources.length})` : 'Tải Âm Thanh'}
+                                        </span>
+                                    </label>
+
+                                    {audioSources.length > 0 && (
+                                        <div className="space-y-3">
+                                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] flex items-center justify-between">
+                                                <span>Playlist Âm thanh ({audioSources.length})</span>
+                                                <button 
+                                                    onClick={() => {
+                                                        audioSources.forEach(s => { if(s.url.startsWith('blob:')) URL.revokeObjectURL(s.url); });
+                                                        setAudioSources([]);
+                                                        setCurrentAudioIndex(0);
+                                                    }}
+                                                    className="text-red-500 hover:text-red-400 transition-colors"
+                                                >
+                                                    Xóa hết
+                                                </button>
+                                            </label>
+                                            <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                                                {audioSources.map((source, index) => (
+                                                    <div 
+                                                        key={source.id} 
+                                                        className={`p-2 rounded-xl border flex items-center gap-3 group transition-all cursor-pointer ${
+                                                            currentAudioIndex === index 
+                                                            ? 'bg-purple-600/10 border-purple-500/50' 
+                                                            : 'bg-[#141414] border-[#262626]'
+                                                        }`}
+                                                        onClick={() => setCurrentAudioIndex(index)}
+                                                    >
+                                                        <div className="flex-grow min-w-0">
+                                                            <p className="text-[10px] font-bold text-white truncate">{source.name}</p>
+                                                        </div>
+                                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (index > 0) {
+                                                                        const newSources = [...audioSources];
+                                                                        [newSources[index], newSources[index-1]] = [newSources[index-1], newSources[index]];
+                                                                        setAudioSources(newSources);
+                                                                    }
+                                                                }}
+                                                                disabled={index === 0}
+                                                                className="p-1 hover:bg-[#262626] rounded disabled:opacity-20"
+                                                            >
+                                                                <ChevronUp size={12} className="text-gray-400" />
+                                                            </button>
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (index < audioSources.length - 1) {
+                                                                        const newSources = [...audioSources];
+                                                                        [newSources[index], newSources[index+1]] = [newSources[index+1], newSources[index]];
+                                                                        setAudioSources(newSources);
+                                                                    }
+                                                                }}
+                                                                disabled={index === audioSources.length - 1}
+                                                                className="p-1 hover:bg-[#262626] rounded disabled:opacity-20"
+                                                            >
+                                                                <ChevronDown size={12} className="text-gray-400" />
+                                                            </button>
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setAudioSources(prev => prev.filter(s => s.id !== source.id));
+                                                                    if (currentAudioIndex >= audioSources.length - 1 && currentAudioIndex > 0) {
+                                                                        setCurrentAudioIndex(prev => prev - 1);
+                                                                    }
+                                                                }}
+                                                                className="p-1 hover:bg-red-900/20 rounded"
+                                                            >
+                                                                <Trash2 size={12} className="text-gray-500" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                <div className="space-y-4">
+                                    <label className="md:col-span-1 cursor-pointer group relative overflow-hidden h-16 bg-[#141414] border border-[#262626] rounded-2xl flex items-center justify-center gap-3 hover:border-blue-500/50 hover:bg-[#1A1A1A] transition-all">
+                                        <input type="file" accept=".srt" className="hidden" onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (file) {
+                                                const reader = new FileReader();
+                                                reader.onload = (e) => {
+                                                    const text = e.target?.result as string;
+                                                    const parsed = parseSrtToChunks(text);
+                                                    setCustomChunks(parsed);
+                                                    const errors = validateSrt(parsed);
+                                                    setSrtErrors(errors);
+                                                };
+                                                reader.readAsText(file);
+                                            }
+                                        }} />
+                                        <span className="text-xs font-bold uppercase text-gray-500 group-hover:text-white tracking-widest flex items-center gap-2">
+                                            Tải Phụ Đề SRT
+                                        </span>
+                                        {customChunks && srtErrors.length === 0 && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-2 h-2 bg-green-500 rounded-full"></div>}
+                                        {srtErrors.length > 0 && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>}
+                                    </label>
+
+                                    {srtErrors.length > 0 && (
+                                        <div className="p-4 bg-red-950/20 border border-red-900/30 rounded-xl space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2 text-red-400">
+                                                    <AlertCircle size={14} />
+                                                    <span className="text-[10px] font-black uppercase tracking-widest">Phát hiện {srtErrors.length} lỗi SRT</span>
+                                                </div>
+                                                <button 
+                                                    onClick={repairSrt}
+                                                    className="px-3 py-1 bg-red-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-red-500 transition-colors flex items-center gap-1.5"
+                                                >
+                                                    <Wand2 size={12} />
+                                                    Sửa lỗi Tự động
+                                                </button>
+                                            </div>
+                                            <div className="max-h-24 overflow-y-auto space-y-1 pr-2 custom-scrollbar">
+                                                {srtErrors.map((err, i) => (
+                                                    <p key={i} className="text-[9px] text-gray-400">• {err.message}</p>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                             <button 
                                 onClick={() => setShowSettings(true)}
@@ -790,7 +1193,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                         setPreviewImage(canvasRef.current.toDataURL('image/jpeg', 0.9));
                                     }
                                 }}
-                                disabled={isRendering || !bgSource}
+                                disabled={isRendering || bgSources.length === 0}
                                 className="w-full py-5 bg-[#141414] border border-[#262626] hover:bg-[#1a1a1a] hover:border-blue-500/50 disabled:opacity-20 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs transition-all flex items-center justify-center gap-4"
                             >
                                 <Camera size={18} />
@@ -798,7 +1201,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                             </button>
                             <button 
                                 onClick={startRendering}
-                                disabled={isRendering || !bgSource}
+                                disabled={isRendering || bgSources.length === 0}
                                 className="w-full py-5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:opacity-20 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs transition-all shadow-xl shadow-blue-900/20 active:scale-[0.98] flex flex-col items-center justify-center gap-1"
                             >
                                 <div className="flex items-center gap-4">
@@ -830,8 +1233,6 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                 className="w-full h-full object-contain"
                             />
                             
-                            {/* Draggable Blur Selection logic in modal, but visual indicator here could be nice too */}
-                            
                             {isRendering && (
                                 <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center animate-in fade-in duration-500">
                                     <div className="relative h-24 w-24 mb-6">
@@ -842,7 +1243,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                         </div>
                                     </div>
                                     <p className="text-white font-black text-[10px] tracking-[0.3em] uppercase">Sản xuất nội dung...</p>
-                                    <p className="text-gray-500 text-[10px] mt-2 underline cursor-not-allowed">Vui lòng không đóng trình duyệt</p>
+                                    <p className="text-gray-400 text-[10px] mt-2">Đang sử dụng: {activeSource?.name || 'Nền'}</p>
+                                    <p className="text-gray-500 text-[10px] mt-1 underline cursor-not-allowed">Vui lòng không đóng trình duyệt</p>
                                 </div>
                             )}
                         </div>
@@ -871,7 +1273,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
                         <div className="absolute opacity-0 pointer-events-none w-[1px] h-[1px] overflow-hidden -z-10">
                              <audio ref={audioRef} src={audioUrl} />
-                             {bgType === 'video' && <video ref={videoRef} src={bgSource || ''} loop playsInline />}
+                             {bgType === 'video' && <video ref={videoRef} src={activeSource?.url || ''} playsInline />}
                         </div>
                     </div>
                 </div>
@@ -1001,9 +1403,9 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                 }}
                                             >
                                                 {/* Video/Image Preview in settings */}
-                                                {bgType === 'image' && bgSource && <img src={bgSource} className="w-full h-full object-cover shadow-2xl" />}
-                                                {bgType === 'video' && bgSource && <video src={bgSource} className="w-full h-full object-contain" muted playsInline autoPlay loop />}
-                                                {!bgSource && <div className="w-full h-full flex flex-col items-center justify-center text-gray-700 font-bold uppercase text-[10px] tracking-widest gap-2 bg-[#080808]">
+                                                {bgType === 'image' && activeSource && <img src={activeSource.url} className="w-full h-full object-cover shadow-2xl" />}
+                                                {bgType === 'video' && activeSource && <video src={activeSource.url} className="w-full h-full object-contain" muted playsInline autoPlay loop />}
+                                                {bgSources.length === 0 && <div className="w-full h-full flex flex-col items-center justify-center text-gray-700 font-bold uppercase text-[10px] tracking-widest gap-2 bg-[#080808]">
                                                     <ImageIcon size={24} className="opacity-20" />
                                                     <span>Chưa chọn ảnh/video nền</span>
                                                 </div>}
@@ -1205,8 +1607,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                             </div>
                                             <div className="aspect-video bg-[#0D0D0D] rounded-2xl overflow-hidden relative border border-[#333] shadow-2xl">
                                                 {/* Background Preview */}
-                                                {bgType === 'image' && bgSource && <img src={bgSource} className="w-full h-full object-cover opacity-50" />}
-                                                {bgType === 'video' && bgSource && <video src={bgSource} className="w-full h-full object-contain opacity-50" muted playsInline autoPlay loop />}
+                                                {bgType === 'image' && activeSource && <img src={activeSource.url} className="w-full h-full object-cover opacity-50" />}
+                                                {bgType === 'video' && activeSource && <video src={activeSource.url} className="w-full h-full object-contain opacity-50" muted playsInline autoPlay loop />}
                                                 
                                                 {/* Logo Overlay */}
                                                 {logoSource && logoConfig.enabled && (
@@ -1242,7 +1644,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                     </div>
                                                 )}
 
-                                                {!bgSource && (
+                                                {bgSources.length === 0 && (
                                                     <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-700 font-bold uppercase tracking-widest">
                                                         Chưa chọn nền để xem trước
                                                     </div>

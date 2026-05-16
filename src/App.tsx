@@ -34,7 +34,7 @@ const App: React.FC = () => {
     const [sharedAudioUrl, setSharedAudioUrl] = useState<string | null>(null);
     const [sharedChunks, setSharedChunks] = useState<ChunkJob[]>([]);
     const [sharedBgType, setSharedBgType] = useState<'image' | 'video' | 'color'>('color');
-    const [sharedBgSource, setSharedBgSource] = useState<string | null>(null);
+    const [sharedBgSources, setSharedBgSources] = useState<any[]>([]);
     
     return (
         <div className="min-h-screen flex flex-col bg-[#0A0A0A]">
@@ -87,10 +87,10 @@ const App: React.FC = () => {
                                 audioUrl={sharedAudioUrl} 
                                 chunks={sharedChunks} 
                                 initialBgType={sharedBgType}
-                                initialBgSource={sharedBgSource}
-                                onBgChange={(type, source) => {
+                                initialBgSources={sharedBgSources}
+                                onBgChange={(type, sources) => {
                                     setSharedBgType(type);
-                                    setSharedBgSource(source);
+                                    setSharedBgSources(sources);
                                 }}
                                 onAudioChange={(url, chunks) => {
                                     setSharedAudioUrl(url);
