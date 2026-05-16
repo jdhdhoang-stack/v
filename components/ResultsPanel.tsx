@@ -15,18 +15,20 @@ interface ResultsPanelProps {
     onClearQueue: () => void;
     onDownloadAll: () => void;
     onRetryChunk: (chunkId: string) => void;
+    onUpdateChunkText: (chunkId: string, text: string) => void;
     onRetryAllFailed: () => void;
     successfulChunksCount: number;
     failedChunksCount: number;
     remainingChunksCount: number;
     totalChunksCount: number;
     onMergeAudio: () => void;
+    onMergeFinalParts: () => void;
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({ 
     chunks, processingState, mergedAudioUrls, isMerging, mergeProgress, onCancel, removeChunk, onClearQueue, onDownloadAll,
-    onRetryChunk, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount,
-    onMergeAudio
+    onRetryChunk, onUpdateChunkText, onRetryAllFailed, successfulChunksCount, failedChunksCount, remainingChunksCount, totalChunksCount,
+    onMergeAudio, onMergeFinalParts
 }) => {
     return (
         <div className="bg-[#121212] border border-[#262626] rounded-xl shadow-sm h-full flex flex-col overflow-hidden text-gray-200">
@@ -135,6 +137,15 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         </div>
                         
                         <div className="grid grid-cols-1 gap-3 pt-2">
+                            {mergedAudioUrls.length > 1 && (
+                                <button
+                                    onClick={onMergeFinalParts}
+                                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all active:scale-[0.97] uppercase tracking-widest shadow-lg shadow-indigo-600/20"
+                                >
+                                    <Layers size={16} />
+                                    Gộp tất cả ({mergedAudioUrls.length} phần) thành 1 file
+                                </button>
+                            )}
                             <button
                                 onClick={onDownloadAll}
                                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all active:scale-[0.97] uppercase tracking-widest"
@@ -155,6 +166,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         index={index} 
                         onRemove={removeChunk}
                         onRetry={onRetryChunk}
+                        onUpdateText={onUpdateChunkText}
                     />
                 ))}
                 

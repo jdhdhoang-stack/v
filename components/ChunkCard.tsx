@@ -1,17 +1,41 @@
 
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { ChunkJob } from '../src/types';
 import { AudioVisualizer } from './AudioVisualizer';
-import { RefreshCcw, Trash2, Download } from 'lucide-react';
+import { RefreshCcw, Trash2, Download, Edit2, Check, X } from 'lucide-react';
 
 interface ChunkCardProps {
     chunk: ChunkJob;
     index: number;
     onRemove: (id: string) => void;
     onRetry: (id: string) => void;
+    onUpdateText: (id: string, text: string) => void;
 }
 
-export const ChunkCard: React.FC<ChunkCardProps> = ({ chunk, index, onRemove, onRetry }) => {
+export const ChunkCard: React.FC<ChunkCardProps> = ({ chunk, index, onRemove, onRetry, onUpdateText }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editText, setEditText] = useState(chunk.text);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    useEffect(() => {
+        if (isEditing && textareaRef.current) {
+            textareaRef.current.focus();
+            textareaRef.current.setSelectionRange(textareaRef.current.value.length, textareaRef.current.value.length);
+        }
+    }, [isEditing]);
+
+    const handleSave = () => {
+        if (editText.trim() !== chunk.text) {
+            onUpdateText(chunk.id, editText.trim());
+        }
+        setIsEditing(false);
+    };
+
+    const handleCancel = () => {
+        setEditText(chunk.text);
+        setIsEditing(false);
+    };
+
     const getStatusStyles = () => {
         switch (chunk.status) {
             case 'finished': return 'border-emerald-900/20 bg-emerald-900/10';
@@ -46,6 +70,15 @@ export const ChunkCard: React.FC<ChunkCardProps> = ({ chunk, index, onRemove, on
                     )}
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {!isEditing && chunk.status !== 'processing' && (
+                        <button 
+                            onClick={() => setIsEditing(true)}
+                            className="p-1.5 text-gray-400 hover:text-white hover:bg-[#262626] rounded-lg transition-colors"
+                            title="Sửa nội dung"
+                        >
+                            <Edit2 size={14} />
+                        </button>
+                    )}
                     {chunk.status === 'error' && (
                         <button 
                             onClick={() => onRetry(chunk.id)}
@@ -65,9 +98,34 @@ export const ChunkCard: React.FC<ChunkCardProps> = ({ chunk, index, onRemove, on
                 </div>
             </div>
             
-            <p className="text-sm text-gray-200 leading-relaxed font-medium line-clamp-2 group-hover:line-clamp-none transition-all duration-300 mb-3">
-                {chunk.text}
-            </p>
+            {isEditing ? (
+                <div className="mb-3 space-y-2">
+                    <textarea
+                        ref={textareaRef}
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        className="w-full bg-[#1A1A1A] border border-[#333] rounded-lg p-2 text-sm text-white focus:outline-none focus:border-indigo-500 min-h-[80px] resize-none"
+                    />
+                    <div className="flex justify-end gap-2">
+                        <button 
+                            onClick={handleCancel}
+                            className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-widest transition-colors"
+                        >
+                            <X size={12} /> Hủy
+                        </button>
+                        <button 
+                            onClick={handleSave}
+                            className="flex items-center gap-1 px-2 py-1 bg-indigo-600 text-white rounded text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-500 transition-colors"
+                        >
+                            <Check size={12} /> Lưu
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-sm text-gray-200 leading-relaxed font-medium line-clamp-2 group-hover:line-clamp-none transition-all duration-300 mb-3">
+                    {chunk.text}
+                </p>
+            )}
 
             {chunk.status === 'finished' && chunk.audioUrl && (
                 <div className="flex flex-col gap-2">

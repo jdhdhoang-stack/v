@@ -257,16 +257,29 @@ export class TextProcessor {
     }
 
     public static parseSrt(content: string): Array<{ text: string; startTime: number; endTime: number; timestamp: string }> {
-        // SRT Parser: Sequence (optional), Timing, Text, empty line
-        const srtRegex = /(?:\d+\r?\n)?(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n?$)/g;
+        // SRT Parser: Sequence (optional, can be on same line), Timing, Text, empty line
+        // Improved regex to handle index on same line and more flexible spacing
+        const srtRegex = /(?:(\d+)\s+)?(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\r?\n([\s\S]*?)(?=\r?\n\s*\r?\n|\r?\n?$)/g;
         const items: Array<{ text: string; startTime: number; endTime: number; timestamp: string }> = [];
         let match;
         
         while ((match = srtRegex.exec(content)) !== null) {
-            const start = match[1];
-            const end = match[2];
-            const text = match[3].replace(/<[^>]*>/g, '').replace(/\r?\n/g, ' ').trim();
-            if (text) {
+            const start = match[2].replace('.', ',');
+            const end = match[3].replace('.', ',');
+            let text = match[4].replace(/<[^>]*>/g, '').trim();
+            
+            // Post-cleaning: remove timeline artifacts if they somehow leaked into text
+            text = text.replace(/\d{1,2}:\d{2}:\d{2}[.,]\d{3}.*-->.*\d{1,2}:\d{2}:\d{2}[.,]\d{3}/g, '');
+            text = text.replace(/\d{1,2}:\d{2}:\d{2}[.,]\d{3}/g, '');
+            
+            // Clean leading indices from each line
+            text = text.split('\n').map(line => line.replace(/^\d+[\s.-]+/, '').trim())
+                       .filter(l => l.length > 0)
+                       .join('\n').trim();
+
+            text = text.replace(/\r?\n/g, ' ').trim();
+
+            if (text && text.length > 0) {
                 items.push({ 
                     text, 
                     startTime: this.parseTimestampToSeconds(start),

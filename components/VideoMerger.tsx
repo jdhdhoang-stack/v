@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface SrtError {
     index: number;
-    type: 'order' | 'overlap' | 'duration' | 'text_contains_timeline';
+    type: 'order' | 'overlap' | 'duration' | 'text_contains_timeline' | 'duplicate' | 'garbage';
     message: string;
 }
 
@@ -95,11 +95,13 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const validateSrt = (chunks: ChunkJob[]) => {
         const errors: SrtError[] = [];
         const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/;
+        const garbageRegex = /[@#$%^&*()_+={}\[\]|\\:;"'<>,.?/~`]{4,}/; // 4+ special chars in a row
 
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const startTime = chunk.startTime || 0;
             const endTime = chunk.endTime || 0;
+            const cleanText = chunk.text.trim().toLowerCase();
 
             // 1. Durations or overlaps
             if (endTime < startTime) {
@@ -112,11 +114,22 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
             if (i > 0) {
                 const prevChunk = chunks[i-1];
+                const prevCleanText = prevChunk.text.trim().toLowerCase();
+
                 if (startTime < (prevChunk.endTime || 0)) {
                     errors.push({
                         index: i,
                         type: 'overlap',
                         message: `Dòng #${i + 1}: Thời gian bắt đầu chồng chéo với dòng trước.`
+                    });
+                }
+
+                // Duplicate check
+                if (cleanText.length > 0 && cleanText === prevCleanText) {
+                    errors.push({
+                        index: i,
+                        type: 'duplicate',
+                        message: `Dòng #${i + 1}: Nội dung lặp lại hoàn toàn dòng trước.`
                     });
                 }
             }
@@ -129,6 +142,26 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                     message: `Dòng #${i + 1}: Nội dung chứa ký tự giống timeline.`
                 });
             }
+
+            // 3. Garbage or empty check
+            const isJustNumbers = /^\d+$/.test(chunk.text.trim());
+            if (garbageRegex.test(chunk.text) || isJustNumbers) {
+                errors.push({
+                    index: i,
+                    type: 'garbage',
+                    message: isJustNumbers 
+                        ? `Dòng #${i + 1}: Nội dung chỉ chứa số (có thể là index bị sót).` 
+                        : `Dòng #${i + 1}: Chứa ký tự rác hoặc chuỗi đặc biệt.`
+                });
+            }
+
+            if (!chunk.text.trim()) {
+                errors.push({
+                    index: i,
+                    type: 'garbage',
+                    message: `Dòng #${i + 1}: Nội dung trống.`
+                });
+            }
         }
         return errors;
     };
@@ -136,30 +169,64 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const repairSrt = () => {
         if (!customChunks) return;
         
-        let repaired = [...customChunks].map(c => ({...c}));
-        const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/;
+        let repaired: ChunkJob[] = [];
+        const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/g;
+        const fullTimelineRegex = /\d+\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/g;
+        const garbageRegex = /[@#$%^&*()_+={}\[\]|\\:;"'<>,.?/~`]{4,}/g;
 
-        for (let i = 0; i < repaired.length; i++) {
-            // Fix text containing timeline
-            if (timecodeRegex.test(repaired[i].text)) {
-                repaired[i].text = repaired[i].text.replace(/\d{2}:\d{2}:\d{2}[.,]\d{3}.*-->.*\d{2}:\d{2}:\d{2}[.,]\d{3}/g, '').trim();
-                repaired[i].text = repaired[i].text.replace(/\d{2}:\d{2}:\d{2}[.,]\d{3}/g, '').trim();
+        const source = [...customChunks].map(c => ({...c}));
+
+        for (let i = 0; i < source.length; i++) {
+            let chunk = source[i];
+            
+            // 1. Clean full timeline blocks inside text (e.g. index + timecode)
+            chunk.text = chunk.text.replace(fullTimelineRegex, '').trim();
+            
+            // 2. Clean standalone timecodes
+            chunk.text = chunk.text.replace(timecodeRegex, '').trim();
+            
+            // 3. Clean leading indices from every line in the text
+            // This handles cases where indices are repeated or leaked into text lines
+            chunk.text = chunk.text.split('\n').map(line => {
+                return line.replace(/^\d+[\s.-]+/, '').trim();
+            }).filter(line => line.length > 0).join('\n').trim();
+            
+            // 4. Clean garbage characters
+            chunk.text = chunk.text.replace(garbageRegex, '').trim();
+            
+            // 5. Fix any weird artifacts like double dots or leading dashes leftover from junk
+            chunk.text = chunk.text.replace(/^[.\-\s]+/, '').trim();
+
+            // Skip empty chunks
+            if (!chunk.text || chunk.text.length < 1) continue;
+
+            // 6. Deduplicate
+            if (repaired.length > 0) {
+                const prev = repaired[repaired.length - 1];
+                if (chunk.text.toLowerCase() === prev.text.toLowerCase()) {
+                    prev.endTime = Math.max(prev.endTime || 0, chunk.endTime || 0);
+                    continue;
+                }
             }
 
-            // Fix duration
-            if ((repaired[i].endTime || 0) < (repaired[i].startTime || 0)) {
-                repaired[i].endTime = (repaired[i].startTime || 0) + 2; // Default 2s duration
+            // 7. Fix duration
+            if ((chunk.endTime || 0) < (chunk.startTime || 0)) {
+                chunk.endTime = (chunk.startTime || 0) + 2;
             }
 
-            // Fix overlaps
-            if (i > 0) {
-                if ((repaired[i].startTime || 0) < (repaired[i-1].endTime || 0)) {
-                    repaired[i].startTime = (repaired[i-1].endTime || 0) + 0.1;
-                    if ((repaired[i].endTime || 0) < (repaired[i].startTime || 0)) {
-                        repaired[i].endTime = (repaired[i].startTime || 0) + 2;
+            // 7. Fix overlaps
+            if (repaired.length > 0) {
+                const prev = repaired[repaired.length - 1];
+                if ((chunk.startTime || 0) < (prev.endTime || 0)) {
+                    // Try to adjust if gap is negative
+                    chunk.startTime = (prev.endTime || 0) + 0.05;
+                    if ((chunk.endTime || 0) <= (chunk.startTime || 0)) {
+                        chunk.endTime = (chunk.startTime || 0) + 1.5;
                     }
                 }
             }
+
+            repaired.push(chunk);
         }
 
         setCustomChunks(repaired);
@@ -202,7 +269,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             return 0;
         };
 
-        const timecodeRegex = /^(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})/;
+        // Improved regex to handle optional leading index on same line
+        const timecodeRegex = /(?:(\d+)\s+)?(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[.,]\d{3})/;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
@@ -210,8 +278,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             
             const timeMatch = line.match(timecodeRegex);
             if (timeMatch) {
+                // If a timeline is found, the previous chunk is complete
                 if (currentChunk) {
                     const textLines = currentChunk.text.split('\n');
+                    // Check if the last text line was just an ID (number)
                     if (textLines.length > 0 && /^\d+$/.test(textLines[textLines.length - 1].trim())) {
                         pendingId = textLines.pop()!.trim();
                         currentChunk.text = textLines.join('\n').trim();
@@ -219,7 +289,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                     srtChunks.push(currentChunk);
                 }
                 
-                if (!pendingId && i > 0) {
+                // timeMatch[1] is the optional index, timeMatch[2] is start, timeMatch[3] is end
+                const capturedId = timeMatch[1] || '';
+                
+                if (!capturedId && !pendingId && i > 0) {
                     const prevLine = lines[i-1].trim();
                     if (/^\d+$/.test(prevLine)) {
                         pendingId = prevLine;
@@ -227,24 +300,29 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                 }
 
                 currentChunk = {
-                    id: pendingId || Math.random().toString(36).substring(2, 9),
+                    id: capturedId || pendingId || Math.random().toString(36).substring(2, 9),
                     text: '',
                     status: 'finished',
-                    startTime: parseTime(timeMatch[1]),
-                    endTime: parseTime(timeMatch[2])
+                    startTime: parseTime(timeMatch[2]),
+                    endTime: parseTime(timeMatch[3])
                 };
                 pendingId = '';
             } else if (currentChunk) {
+                // Not a timecode line, so it's text (or index of next chunk)
                 currentChunk.text += (currentChunk.text ? '\n' : '') + line;
             }
         }
         
         if (currentChunk) {
             const textLines = currentChunk.text.split('\n');
-            if (textLines.length > 0 && /^\d+$/.test(textLines[textLines.length - 1].trim()) && textLines.length > 1) {
+            // Remove trailing index if present
+            if (textLines.length > 0 && /^\d+$/.test(textLines[textLines.length - 1].trim())) {
                 textLines.pop();
-                currentChunk.text = textLines.join('\n').trim();
             }
+            // Also clean leading indices from each line
+            currentChunk.text = textLines.map(line => line.replace(/^\d+[\s.-]+/, '').trim())
+                                        .filter(l => l.length > 0)
+                                        .join('\n').trim();
             srtChunks.push(currentChunk);
         }
 

@@ -229,6 +229,79 @@ export const TextToSpeech: React.FC<{
         }
     }, [chunks, onAudioMerged]);
 
+    const mergeFinalParts = useCallback(async () => {
+        if (mergedAudioUrls.length <= 1) return;
+        
+        try {
+            setIsMerging(true);
+            setMergeProgress(0);
+            
+            const isTimedMerge = chunks.some(c => c.startTime !== undefined);
+            
+            if (isTimedMerge) {
+                // For timed merge, we use OfflineAudioContext to join the already merged parts
+                const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+                const tempCtx = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
+                
+                const audioBuffers = await Promise.all(
+                    mergedAudioUrls.map(async url => {
+                        const res = await fetch(url);
+                        const arrayBuffer = await res.arrayBuffer();
+                        return await tempCtx.decodeAudioData(arrayBuffer);
+                    })
+                );
+
+                const totalDuration = audioBuffers.reduce((acc, buf) => acc + buf.duration, 0);
+                const offlineCtx = new OfflineAudioContext(
+                    audioBuffers[0].numberOfChannels,
+                    Math.ceil((totalDuration + 0.1) * audioBuffers[0].sampleRate),
+                    audioBuffers[0].sampleRate
+                );
+
+                let offset = 0;
+                audioBuffers.forEach(buffer => {
+                    const source = offlineCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(offlineCtx.destination);
+                    source.start(offset);
+                    offset += buffer.duration;
+                });
+
+                const renderedBuffer = await offlineCtx.startRendering();
+                const wavBlob = audioBufferToWav(renderedBuffer);
+                const url = URL.createObjectURL(wavBlob);
+                
+                setMergedAudioUrls(prev => {
+                    prev.forEach(u => URL.revokeObjectURL(u));
+                    return [url];
+                });
+                onAudioMerged?.(url);
+            } else {
+                // For regular text, just concatenate blobs
+                const blobs = await Promise.all(
+                    mergedAudioUrls.map(async url => {
+                        const res = await fetch(url);
+                        return await res.blob();
+                    })
+                );
+                const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(mergedBlob);
+                
+                setMergedAudioUrls(prev => {
+                    prev.forEach(u => URL.revokeObjectURL(u));
+                    return [url];
+                });
+                onAudioMerged?.(url);
+            }
+            
+            setMergeProgress(100);
+        } catch (error) {
+            console.error("Gộp file Master thất bại:", error);
+        } finally {
+            setIsMerging(false);
+        }
+    }, [mergedAudioUrls, chunks, onAudioMerged]);
+
     const successfulChunksCount = useMemo(() => chunks.filter(c => c.status === 'finished').length, [chunks]);
     const failedChunksCount = useMemo(() => chunks.filter(c => c.status === 'error').length, [chunks]);
     const totalChunksCount = chunks.length;
@@ -310,6 +383,14 @@ export const TextToSpeech: React.FC<{
             prev.map(c => c.id === chunkId ? { ...c, status: 'pending', error: null } : c)
         );
         setShouldProcess(true);
+    }, []);
+
+    const updateChunkText = useCallback((chunkId: string, newText: string) => {
+        setChunks(prev => 
+            prev.map(c => c.id === chunkId ? { ...c, text: newText, status: 'pending', error: null, audioUrl: undefined } : c)
+        );
+        // Only trigger auto-process if we were already in processing state or if user specifically wants it?
+        // Let's assume if they edit, they want it to re-queue.
     }, []);
 
     const retryAllFailed = useCallback(() => {
@@ -469,7 +550,9 @@ export const TextToSpeech: React.FC<{
                 onClearQueue={clearQueue}
                 onDownloadAll={handleDownloadAll}
                 onMergeAudio={mergeAudio}
+                onMergeFinalParts={mergeFinalParts}
                 onRetryChunk={retryChunk}
+                onUpdateChunkText={updateChunkText}
                 onRetryAllFailed={retryAllFailed}
                 successfulChunksCount={successfulChunksCount}
                 failedChunksCount={failedChunksCount}
