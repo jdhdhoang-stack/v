@@ -35,7 +35,7 @@ export const TextToSpeech: React.FC<{
     const abortControllerRef = useRef<AbortController | null>(null);
 
     const mergeFinalPartsInternal = useCallback(async (partsToMerge: Array<{ url: string, startTime: number, isTimed: boolean }>) => {
-        if (partsToMerge.length === 0) return;
+        if (partsToMerge.length === 0) return null;
         
         try {
             setIsMerging(true);
@@ -55,14 +55,16 @@ export const TextToSpeech: React.FC<{
                             const buffer = await tempCtx.decodeAudioData(arrayBuffer);
                             return { buffer, startTime: item.startTime };
                         } catch (e) {
+                            console.error("Lỗi giải mã audio part:", e);
                             return null;
                         }
                     })
                 );
 
                 const validBuffers = buffersWithMetadata.filter(Boolean) as any[];
-                if (validBuffers.length === 0) return;
+                if (validBuffers.length === 0) return null;
 
+                // IMPORTANT: In timed mode, the final file MUST start at 0s and strictly follow SRT timecodes
                 const maxEnd = validBuffers.reduce((max, item) => 
                     Math.max(max, item.startTime + item.buffer.duration), 0);
                 
@@ -76,6 +78,7 @@ export const TextToSpeech: React.FC<{
                     const source = offlineCtx.createBufferSource();
                     source.buffer = item.buffer;
                     source.connect(offlineCtx.destination);
+                    // Place at absolute startTime (relative to 0s)
                     source.start(item.startTime);
                 });
 
@@ -88,6 +91,7 @@ export const TextToSpeech: React.FC<{
                     return [{ url, startTime: 0, isTimed: true }];
                 });
                 onAudioMerged?.(url);
+                return url;
             } else {
                 const blobs = await Promise.all(
                     partsToMerge.map(async item => {
@@ -103,13 +107,14 @@ export const TextToSpeech: React.FC<{
                     return [{ url, startTime: 0, isTimed: false }];
                 });
                 onAudioMerged?.(url);
+                return url;
             }
-            
-            setMergeProgress(100);
         } catch (error) {
             console.error("Gộp file Master thất bại:", error);
+            return null;
         } finally {
             setIsMerging(false);
+            setMergeProgress(100);
         }
     }, [onAudioMerged]);
 
@@ -125,7 +130,7 @@ export const TextToSpeech: React.FC<{
             }
 
             const isTimedMerge = chunks.some(c => c.startTime !== undefined);
-            const PART_SIZE = 1000;
+            const PART_SIZE = 500; // Smaller size for more visible progress
             const finalParts: Array<{ url: string, startTime: number, isTimed: boolean }> = [];
 
             for (let p = 0; p < finishedChunks.length; p += PART_SIZE) {
@@ -214,11 +219,15 @@ export const TextToSpeech: React.FC<{
                 prev.forEach(u => URL.revokeObjectURL(u.url));
                 return finalParts;
             });
-            if (finalParts.length > 1) {
-                setTimeout(() => mergeFinalPartsInternal(finalParts), 100);
+
+            // Master Merge: Padding from 0s and strictly respecting SRT timecodes
+            if (isTimedMerge || finalParts.length > 1) {
+                await mergeFinalPartsInternal(finalParts);
             } else {
                 onAudioMerged?.(finalParts.length > 0 ? finalParts[0].url : null);
             }
+            
+            setMergeProgress(100);
         } catch (error) {
             console.error("Gộp file âm thanh thất bại:", error);
         } finally {
