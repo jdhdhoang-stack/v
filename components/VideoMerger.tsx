@@ -172,53 +172,64 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         let repaired: ChunkJob[] = [];
         const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/g;
         const fullTimelineRegex = /\d+\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/g;
-        const garbageRegex = /[@#$%^&*()_+={}\[\]|\\:;"'<>,.?/~`]{4,}/g;
+        const indexLineRegex = /^\d+$/;
+        const garbageRegex = /[@#$%^&*()_+={}\[\]|\\:;"'<>,.?/~`]{3,}/g;
 
         const source = [...customChunks].map(c => ({...c}));
 
         for (let i = 0; i < source.length; i++) {
             let chunk = source[i];
             
-            // 1. Clean full timeline blocks inside text (e.g. index + timecode)
+            // 1. Clean full timeline blocks inside text
             chunk.text = chunk.text.replace(fullTimelineRegex, '').trim();
             
             // 2. Clean standalone timecodes
             chunk.text = chunk.text.replace(timecodeRegex, '').trim();
             
-            // 3. Clean leading indices from every line in the text
-            // This handles cases where indices are repeated or leaked into text lines
-            chunk.text = chunk.text.split('\n').map(line => {
-                return line.replace(/^\d+[\s.-]+/, '').trim();
-            }).filter(line => line.length > 0).join('\n').trim();
+            // 3. Process every line to remove indices and repeat words
+            const cleanedLines = chunk.text.split('\n').map(line => {
+                let l = line.trim();
+                // Remove leading indices (e.g. "123 text" -> "text")
+                l = l.replace(/^\d+[\s.-]*/, '');
+                // Skip if the line is now just a number or empty
+                if (indexLineRegex.test(l)) return '';
+                
+                // Remove repeated words in the same line (e.g. "hello hello" -> "hello")
+                const words = l.split(/\s+/);
+                const uniqueWords: string[] = [];
+                for (let w = 0; w < words.length; w++) {
+                    if (w === 0 || words[w].toLowerCase() !== words[w-1].toLowerCase()) {
+                        uniqueWords.push(words[w]);
+                    }
+                }
+                return uniqueWords.join(' ');
+            }).filter(line => line.length > 0);
+
+            chunk.text = cleanedLines.join('\n').trim();
             
-            // 4. Clean garbage characters
+            // 4. Clean garbage characters and excessive symbols
             chunk.text = chunk.text.replace(garbageRegex, '').trim();
-            
-            // 5. Fix any weird artifacts like double dots or leading dashes leftover from junk
             chunk.text = chunk.text.replace(/^[.\-\s]+/, '').trim();
 
-            // Skip empty chunks
             if (!chunk.text || chunk.text.length < 1) continue;
 
-            // 6. Deduplicate
+            // 5. Deduplicate and merge identical consecutive chunks
             if (repaired.length > 0) {
                 const prev = repaired[repaired.length - 1];
-                if (chunk.text.toLowerCase() === prev.text.toLowerCase()) {
+                if (chunk.text.toLowerCase().replace(/\s+/g, '') === prev.text.toLowerCase().replace(/\s+/g, '')) {
                     prev.endTime = Math.max(prev.endTime || 0, chunk.endTime || 0);
                     continue;
                 }
             }
 
-            // 7. Fix duration
-            if ((chunk.endTime || 0) < (chunk.startTime || 0)) {
+            // 6. Fix timing
+            if ((chunk.endTime || 0) <= (chunk.startTime || 0)) {
                 chunk.endTime = (chunk.startTime || 0) + 2;
             }
 
-            // 7. Fix overlaps
             if (repaired.length > 0) {
                 const prev = repaired[repaired.length - 1];
                 if ((chunk.startTime || 0) < (prev.endTime || 0)) {
-                    // Try to adjust if gap is negative
                     chunk.startTime = (prev.endTime || 0) + 0.05;
                     if ((chunk.endTime || 0) <= (chunk.startTime || 0)) {
                         chunk.endTime = (chunk.startTime || 0) + 1.5;
@@ -1207,12 +1218,25 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                             const file = e.target.files?.[0];
                                             if (file) {
                                                 const reader = new FileReader();
-                                                reader.onload = (e) => {
-                                                    const text = e.target?.result as string;
+                                                reader.onload = (re) => {
+                                                    const text = re.target?.result as string;
+                                                    setLastUploadedSrt(text);
                                                     const parsed = parseSrtToChunks(text);
-                                                    setCustomChunks(parsed);
-                                                    const errors = validateSrt(parsed);
-                                                    setSrtErrors(errors);
+                                                    
+                                                    // Giai đoạn 1: Auto-scan & sửa nhẹ khi upload
+                                                    // Loại bỏ các dòng chỉ có số (STT bị sót) hoặc dòng chứa timeline lạc vào
+                                                    const cleaned = parsed.map(c => {
+                                                        const textLines = c.text.split('\n')
+                                                            .filter(l => !/^\d+$/.test(l.trim()))
+                                                            .filter(l => !/\d{2}:\d{2}:\d{2}/.test(l));
+                                                        return {
+                                                            ...c,
+                                                            text: textLines.join('\n').trim()
+                                                        };
+                                                    }).filter(c => c.text.length > 0);
+                                                    
+                                                    setCustomChunks(cleaned);
+                                                    setSrtErrors(validateSrt(cleaned));
                                                 };
                                                 reader.readAsText(file);
                                             }
@@ -1223,6 +1247,16 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                         {customChunks && srtErrors.length === 0 && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-2 h-2 bg-green-500 rounded-full"></div>}
                                         {srtErrors.length > 0 && <div className="absolute right-4 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>}
                                     </label>
+
+                                    {customChunks && srtErrors.length === 0 && (
+                                        <button 
+                                            onClick={repairSrt}
+                                            className="w-full py-3 bg-purple-600/10 border border-dashed border-purple-500/40 rounded-xl text-purple-400 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-purple-600/20 transition-all flex items-center justify-center gap-2 group"
+                                        >
+                                            <Wand2 size={14} className="group-hover:rotate-12 transition-transform" />
+                                            Sửa lỗi nâng cao (Dọn rác & Lặp từ)
+                                        </button>
+                                    )}
 
                                     {srtErrors.length > 0 && (
                                         <div className="p-4 bg-red-950/20 border border-red-900/30 rounded-xl space-y-3">

@@ -29,10 +29,89 @@ export const TextToSpeech: React.FC<{
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
     const [concurrentThreads, setConcurrentThreads] = useState(10);
     const [requestDelay, setRequestDelay] = useState(100);
-    const [mergedAudioUrls, setMergedAudioUrls] = useState<string[]>([]);
+    const [mergedAudioUrls, setMergedAudioUrls] = useState<Array<{ url: string, startTime: number, isTimed: boolean }>>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
     const abortControllerRef = useRef<AbortController | null>(null);
+
+    const mergeFinalPartsInternal = useCallback(async (partsToMerge: Array<{ url: string, startTime: number, isTimed: boolean }>) => {
+        if (partsToMerge.length === 0) return;
+        
+        try {
+            setIsMerging(true);
+            setMergeProgress(0);
+            
+            const isTimed = partsToMerge.some(p => p.isTimed);
+            
+            if (isTimed) {
+                const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+                const tempCtx = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
+                
+                const buffersWithMetadata = await Promise.all(
+                    partsToMerge.map(async item => {
+                        try {
+                            const res = await fetch(item.url);
+                            const arrayBuffer = await res.arrayBuffer();
+                            const buffer = await tempCtx.decodeAudioData(arrayBuffer);
+                            return { buffer, startTime: item.startTime };
+                        } catch (e) {
+                            return null;
+                        }
+                    })
+                );
+
+                const validBuffers = buffersWithMetadata.filter(Boolean) as any[];
+                if (validBuffers.length === 0) return;
+
+                const maxEnd = validBuffers.reduce((max, item) => 
+                    Math.max(max, item.startTime + item.buffer.duration), 0);
+                
+                const offlineCtx = new OfflineAudioContext(
+                    validBuffers[0].buffer.numberOfChannels,
+                    Math.ceil((maxEnd + 0.1) * validBuffers[0].buffer.sampleRate),
+                    validBuffers[0].buffer.sampleRate
+                );
+
+                validBuffers.forEach(item => {
+                    const source = offlineCtx.createBufferSource();
+                    source.buffer = item.buffer;
+                    source.connect(offlineCtx.destination);
+                    source.start(item.startTime);
+                });
+
+                const renderedBuffer = await offlineCtx.startRendering();
+                const wavBlob = audioBufferToWav(renderedBuffer);
+                const url = URL.createObjectURL(wavBlob);
+                
+                setMergedAudioUrls(prev => {
+                    prev.forEach(u => URL.revokeObjectURL(u.url));
+                    return [{ url, startTime: 0, isTimed: true }];
+                });
+                onAudioMerged?.(url);
+            } else {
+                const blobs = await Promise.all(
+                    partsToMerge.map(async item => {
+                        const res = await fetch(item.url);
+                        return await res.blob();
+                    })
+                );
+                const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(mergedBlob);
+                
+                setMergedAudioUrls(prev => {
+                    prev.forEach(u => URL.revokeObjectURL(u.url));
+                    return [{ url, startTime: 0, isTimed: false }];
+                });
+                onAudioMerged?.(url);
+            }
+            
+            setMergeProgress(100);
+        } catch (error) {
+            console.error("Gộp file Master thất bại:", error);
+        } finally {
+            setIsMerging(false);
+        }
+    }, [onAudioMerged]);
 
     const mergeAudio = useCallback(async () => {
         let audioContext: AudioContext | null = null;
@@ -45,23 +124,22 @@ export const TextToSpeech: React.FC<{
                 return;
             }
 
-            // Check if we should use timing-based merge
             const isTimedMerge = chunks.some(c => c.startTime !== undefined);
-            const PART_SIZE = 500;
-            const finalUrls: string[] = [];
+            const PART_SIZE = 1000;
+            const finalParts: Array<{ url: string, startTime: number, isTimed: boolean }> = [];
 
             for (let p = 0; p < finishedChunks.length; p += PART_SIZE) {
                 const partChunks = finishedChunks.slice(p, p + PART_SIZE);
                 const progressOffset = (p / finishedChunks.length) * 100;
                 const progressMultiplier = partChunks.length / finishedChunks.length;
+                const partStartTime = partChunks[0].startTime || 0;
 
                 if (isTimedMerge) {
                     const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
                     audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
                     
-                    const baseTime = p === 0 ? 0 : (partChunks[0].startTime || 0);
-                    // Load and decode in batches
-                    const audioBuffers = [];
+                    const baseTime = partStartTime;
+                    const audioBuffers: Array<{ buffer: AudioBuffer, startTime: number }> = [];
                     const batchSize = 10;
                     for (let i = 0; i < partChunks.length; i += batchSize) {
                         const batch = partChunks.slice(i, i + batchSize);
@@ -70,123 +148,45 @@ export const TextToSpeech: React.FC<{
                                 try {
                                     const response = await fetch(chunk.audioUrl!);
                                     const arrayBuffer = await response.arrayBuffer();
-                                    
-                                    // Wrap decode in Promise for older Safari support + safety
                                     const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
                                         try {
                                             const promise = audioContext!.decodeAudioData(arrayBuffer, resolve, reject);
-                                            if (promise) {
-                                                promise.catch(reject);
-                                            }
-                                        } catch (err) {
-                                            reject(err);
-                                        }
+                                            if (promise) promise.catch(reject);
+                                        } catch (err) { reject(err); }
                                     });
-
                                     return {
                                         buffer: audioBuffer,
                                         startTime: (chunk.startTime !== undefined ? chunk.startTime - baseTime : 0),
                                     };
-                                } catch (e) {
-                                    console.error(`Lỗi giải mã chunk ${chunk.id}:`, e);
-                                    return null;
-                                }
+                                } catch (e) { return null; }
                             })
                         );
                         audioBuffers.push(...batchResult.filter(Boolean) as any[]);
                         setMergeProgress(Math.floor(progressOffset + (i / partChunks.length) * 50 * progressMultiplier));
-                        // Yield to main thread
                         await new Promise(resolve => setTimeout(resolve, 0));
                     }
                     
-                    if (audioBuffers.length === 0) {
-                        throw new Error("Không giải mã được bất kỳ fragment âm thanh nào.");
-                    }
+                    if (audioBuffers.length === 0) continue;
 
-                    // Sort by startTime
-                    const sortedBuffers = [...audioBuffers].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
-                    
-                    let currentTime = 0;
-                    const timedBuffers = sortedBuffers.map((item, index, arr) => {
-                            const nextItem = arr[index + 1];
-                            const originalDuration = item.buffer.duration;
-                            const idealStart = item.startTime || 0;
-                            
-                            // Dynamic Sync: Start at ideal time, or as soon as possible if delayed
-                            const actualStart = Math.max(idealStart, currentTime);
-                            
-                            let speed = 1.0;
-                            // Look ahead at next segments to determine if we need to catch up
-                            if (nextItem && nextItem.startTime !== undefined) {
-                                const nextIdealStart = nextItem.startTime;
-                                const availableWindow = nextIdealStart - actualStart;
-                                
-                                if (availableWindow <= 0) {
-                                    speed = 1.25; 
-                                } else if (originalDuration > availableWindow) {
-                                    speed = Math.min(1.25, originalDuration / availableWindow);
-                                }
-
-                                const itemAfterNext = arr[index + 2];
-                                if (itemAfterNext && itemAfterNext.startTime !== undefined) {
-                                    const afterNextIdealStart = itemAfterNext.startTime;
-                                    const estimatedNextStart = actualStart + (originalDuration / speed);
-                                    const nextSegmentDuration = nextItem.buffer.duration;
-                                    const estimatedAfterNextStart = estimatedNextStart + (nextSegmentDuration / 1.25);
-                                    
-                                    if (estimatedAfterNextStart > afterNextIdealStart) {
-                                        speed = Math.max(speed, Math.min(1.25, speed * 1.1));
-                                    }
-                                }
-                            }
-
-                            speed = isNaN(speed) || !isFinite(speed) ? 1.0 : Math.max(1.0, Math.min(1.25, speed));
-                            
-                            const effectiveDuration = originalDuration / speed;
-                            currentTime = actualStart + effectiveDuration;
-
-                            return {
-                                ...item,
-                                actualStartTime: actualStart,
-                                playbackRate: speed
-                            };
-                        });
-
-                    const totalDuration = timedBuffers.length > 0 
-                        ? timedBuffers.reduce((max, item) => Math.max(max, item.actualStartTime + (item.buffer.duration / (item.playbackRate || 1.0))), 0)
-                        : 0;
-                    
-                    const safeTotalDuration = totalDuration + 0.1;
-
-                    // Limit max duration per part to prevent crashing OfflineAudioContext (e.g., max 15 minutes)
-                    if (safeTotalDuration > 900) {
-                        console.warn(`Phần gộp âm thanh quá dài (${safeTotalDuration}s), có thể gây treo trình duyệt. Khuyến nghị tách nhỏ file SRT.`);
-                    }
-
+                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + item.buffer.duration), 0);
                     const offlineCtx = new OfflineAudioContext(
                         audioBuffers[0].buffer.numberOfChannels,
-                        Math.ceil(safeTotalDuration * audioBuffers[0].buffer.sampleRate),
+                        Math.ceil((totalDuration + 0.1) * audioBuffers[0].buffer.sampleRate),
                         audioBuffers[0].buffer.sampleRate
                     );
 
-                    timedBuffers.forEach(item => {
+                    audioBuffers.forEach(item => {
                         const source = offlineCtx.createBufferSource();
                         source.buffer = item.buffer;
-                        source.playbackRate.value = item.playbackRate || 1.0;
                         source.connect(offlineCtx.destination);
-                        source.start(item.actualStartTime);
+                        source.start(item.startTime);
                     });
 
                     const renderedBuffer = await offlineCtx.startRendering();
-                    setMergeProgress(Math.floor(progressOffset + 90 * progressMultiplier));
-                    
-                    await new Promise(resolve => setTimeout(resolve, 50));
-
                     const wavBlob = audioBufferToWav(renderedBuffer);
                     const url = URL.createObjectURL(wavBlob);
-                    finalUrls.push(url);
+                    finalParts.push({ url, startTime: partStartTime, isTimed: true });
                 } else {
-                    // Regular concatenation for non-SRT text
                     const blobs: Blob[] = [];
                     const batchSize = 50;
                     for (let i = 0; i < partChunks.length; i += batchSize) {
@@ -196,111 +196,40 @@ export const TextToSpeech: React.FC<{
                                 try {
                                     const res = await fetch(chunk.audioUrl!);
                                     return await res.blob();
-                                } catch (e) {
-                                    console.warn("Fetch blob failed", e);
-                                    return new Blob([]);
-                                }
+                                } catch (e) { return new Blob([]); }
                             })
                         );
                         blobs.push(...batchBlobs);
                         setMergeProgress(Math.floor(progressOffset + ((i + batchSize) / partChunks.length) * 90 * progressMultiplier));
-                        // Yield to main thread
                         await new Promise(resolve => setTimeout(resolve, 0));
                     }
                     const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
                     const url = URL.createObjectURL(mergedBlob);
-                    finalUrls.push(url);
+                    finalParts.push({ url, startTime: 0, isTimed: false });
                 }
             }
 
             setMergeProgress(100);
             setMergedAudioUrls(prev => {
-                prev.forEach(u => URL.revokeObjectURL(u));
-                return finalUrls;
+                prev.forEach(u => URL.revokeObjectURL(u.url));
+                return finalParts;
             });
-            onAudioMerged?.(finalUrls.length > 0 ? finalUrls[0] : null);
+            if (finalParts.length > 1) {
+                setTimeout(() => mergeFinalPartsInternal(finalParts), 100);
+            } else {
+                onAudioMerged?.(finalParts.length > 0 ? finalParts[0].url : null);
+            }
         } catch (error) {
             console.error("Gộp file âm thanh thất bại:", error);
         } finally {
             setIsMerging(false);
-            if (audioContext && typeof audioContext.close === 'function') {
-                await audioContext.close();
-            }
+            if (audioContext && typeof audioContext.close === 'function') await audioContext.close();
         }
-    }, [chunks, onAudioMerged]);
+    }, [chunks, onAudioMerged, mergeFinalPartsInternal]);
 
-    const mergeFinalParts = useCallback(async () => {
-        if (mergedAudioUrls.length <= 1) return;
-        
-        try {
-            setIsMerging(true);
-            setMergeProgress(0);
-            
-            const isTimedMerge = chunks.some(c => c.startTime !== undefined);
-            
-            if (isTimedMerge) {
-                // For timed merge, we use OfflineAudioContext to join the already merged parts
-                const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-                const tempCtx = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
-                
-                const audioBuffers = await Promise.all(
-                    mergedAudioUrls.map(async url => {
-                        const res = await fetch(url);
-                        const arrayBuffer = await res.arrayBuffer();
-                        return await tempCtx.decodeAudioData(arrayBuffer);
-                    })
-                );
-
-                const totalDuration = audioBuffers.reduce((acc, buf) => acc + buf.duration, 0);
-                const offlineCtx = new OfflineAudioContext(
-                    audioBuffers[0].numberOfChannels,
-                    Math.ceil((totalDuration + 0.1) * audioBuffers[0].sampleRate),
-                    audioBuffers[0].sampleRate
-                );
-
-                let offset = 0;
-                audioBuffers.forEach(buffer => {
-                    const source = offlineCtx.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(offlineCtx.destination);
-                    source.start(offset);
-                    offset += buffer.duration;
-                });
-
-                const renderedBuffer = await offlineCtx.startRendering();
-                const wavBlob = audioBufferToWav(renderedBuffer);
-                const url = URL.createObjectURL(wavBlob);
-                
-                setMergedAudioUrls(prev => {
-                    prev.forEach(u => URL.revokeObjectURL(u));
-                    return [url];
-                });
-                onAudioMerged?.(url);
-            } else {
-                // For regular text, just concatenate blobs
-                const blobs = await Promise.all(
-                    mergedAudioUrls.map(async url => {
-                        const res = await fetch(url);
-                        return await res.blob();
-                    })
-                );
-                const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
-                const url = URL.createObjectURL(mergedBlob);
-                
-                setMergedAudioUrls(prev => {
-                    prev.forEach(u => URL.revokeObjectURL(u));
-                    return [url];
-                });
-                onAudioMerged?.(url);
-            }
-            
-            setMergeProgress(100);
-        } catch (error) {
-            console.error("Gộp file Master thất bại:", error);
-        } finally {
-            setIsMerging(false);
-        }
-    }, [mergedAudioUrls, chunks, onAudioMerged]);
+    const mergeFinalParts = useCallback(() => {
+        mergeFinalPartsInternal(mergedAudioUrls);
+    }, [mergeFinalPartsInternal, mergedAudioUrls]);
 
     const successfulChunksCount = useMemo(() => chunks.filter(c => c.status === 'finished').length, [chunks]);
     const failedChunksCount = useMemo(() => chunks.filter(c => c.status === 'error').length, [chunks]);
@@ -316,7 +245,7 @@ export const TextToSpeech: React.FC<{
             mergeAudio();
         } else if (processingState === 'processing' || totalChunksCount === 0) {
             if (mergedAudioUrls.length > 0) {
-                mergedAudioUrls.forEach(u => URL.revokeObjectURL(u));
+                mergedAudioUrls.forEach(u => URL.revokeObjectURL(u.url));
                 setMergedAudioUrls([]);
                 onAudioMerged?.(null);
             }
@@ -497,13 +426,12 @@ export const TextToSpeech: React.FC<{
         for (let i = 0; i < mergedAudioUrls.length; i++) {
             const fileName = mergedAudioUrls.length > 1 ? `${baseName}_part${i + 1}${ext}` : `${baseName}${ext}`;
             const a = document.createElement('a');
-            a.href = mergedAudioUrls[i];
+            a.href = mergedAudioUrls[i].url;
             a.download = fileName;
             document.body.appendChild(a);
             a.click();
             a.remove();
             
-            // Add a small delay to avoid browser blocking multiple downloads
             if (mergedAudioUrls.length > 1 && i < mergedAudioUrls.length - 1) {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
