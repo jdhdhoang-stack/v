@@ -26,6 +26,8 @@ interface ConfigurationProps {
     setConcurrentThreads: (value: number) => void;
     requestDelay: number;
     setRequestDelay: (value: number) => void;
+    speed: number;
+    setSpeed: (value: number) => void;
 }
 
 const TARGET_LANGS = [
@@ -41,7 +43,8 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
     speaker, setSpeaker, selectedCountry, onCountryChange, speakerGroups, isProcessing,
     onProcessQueue, onAddContent, pendingChunksCount,
     maxChars, setMaxChars, minCharsToMerge, setMinCharsToMerge,
-    concurrentThreads, setConcurrentThreads, requestDelay, setRequestDelay
+    concurrentThreads, setConcurrentThreads, requestDelay, setRequestDelay,
+    speed, setSpeed
 }) => {
     const [textToAdd, setTextToAdd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -87,6 +90,16 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                 const blocks = SrtValidator.parse(textToAdd);
                 const errors = SrtValidator.validate(blocks);
                 setSrtErrors(errors);
+                
+                // Giai đoạn 1: Auto-scan & sửa nhẹ khi upload
+                // Nếu chưa có fixed content, thử sửa các lỗi cơ bản ngay
+                if (errors.length > 0 && !fixedSrtContent) {
+                    const repaired = TextProcessor.fixSrtContent(textToAdd);
+                    if (repaired !== textToAdd) {
+                        // Chúng ta không tự ý thay đổi textToAdd ngay lập tức để tránh gây phiền hà
+                        // Nhưng chúng ta có thể highlight nút "Sửa lỗi"
+                    }
+                }
             } catch (e) {
                 setSrtErrors([]);
             }
@@ -94,7 +107,7 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
             setSrtErrors([]);
             setFixedSrtContent(null);
         }
-    }, [textToAdd, isSrtLike]);
+    }, [textToAdd, isSrtLike, fixedSrtContent]);
 
     const handleFixSrt = () => {
         if (!textToAdd.trim()) return;
@@ -154,7 +167,14 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
 
     const handleFileAdded = (content: string | Array<{ text: string; startTime: number; endTime: number; timestamp: string }>) => {
         if (typeof content === 'string') {
-            setTextToAdd(content);
+            const isSrt = content.includes('-->') && content.split('\n').some(line => /\d{2}:\d{2}:\d{2}/.test(line));
+            if (isSrt) {
+                // Giai đoạn 1: Auto-scan & sửa nhẹ khi upload thành văn bản
+                const repaired = TextProcessor.fixSrtContent(content);
+                setTextToAdd(repaired);
+            } else {
+                setTextToAdd(content);
+            }
         } else {
             onAddContent(content);
         }
@@ -205,6 +225,24 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                                 <option key={spk.id} value={spk.id}>{spk.name}</option>
                             ))}
                         </select>
+                    </div>
+                </div>
+                
+                <div className="bg-[#1A1A1A] border border-[#262626] p-4 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-gray-400 flex items-center gap-2 uppercase tracking-tight">
+                            Tốc độ giọng đọc: <span className="text-blue-400 font-mono text-sm">{speed.toFixed(1)}x</span>
+                        </label>
+                    </div>
+                    <input 
+                        type="range" min="0.5" max="2.0" step="0.1" 
+                        value={speed} onChange={e => setSpeed(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-[#0D0D0D] rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                    <div className="flex justify-between text-[8px] text-gray-600 font-bold uppercase tracking-widest px-1">
+                        <span>Chậm</span>
+                        <span>Bình thường</span>
+                        <span>Nhanh</span>
                     </div>
                 </div>
 

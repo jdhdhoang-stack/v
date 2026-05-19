@@ -29,6 +29,7 @@ export const TextToSpeech: React.FC<{
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
     const [concurrentThreads, setConcurrentThreads] = useState(10);
     const [requestDelay, setRequestDelay] = useState(100);
+    const [speed, setSpeed] = useState(1.0);
     const [mergedAudioUrls, setMergedAudioUrls] = useState<Array<{ url: string, startTime: number, isTimed: boolean }>>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
@@ -192,24 +193,46 @@ export const TextToSpeech: React.FC<{
                     const url = URL.createObjectURL(wavBlob);
                     finalParts.push({ url, startTime: partStartTime, isTimed: true });
                 } else {
-                    const blobs: Blob[] = [];
-                    const batchSize = 50;
-                    for (let i = 0; i < partChunks.length; i += batchSize) {
-                        const batch = partChunks.slice(i, i + batchSize);
-                        const batchBlobs = await Promise.all(
-                            batch.map(async chunk => {
-                                try {
-                                    const res = await fetch(chunk.audioUrl!);
-                                    return await res.blob();
-                                } catch (e) { return new Blob([]); }
-                            })
-                        );
-                        blobs.push(...batchBlobs);
-                        setMergeProgress(Math.floor(progressOffset + ((i + batchSize) / partChunks.length) * 90 * progressMultiplier));
-                        await new Promise(resolve => setTimeout(resolve, 0));
+                    const OfflineAudioCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+                    audioContext = new OfflineAudioCtx(1, 1, 44100) as unknown as AudioContext;
+                    
+                    const audioBuffers: Array<{ buffer: AudioBuffer, startTime: number }> = [];
+                    const PAUSE_DURATION = 0.3; // 300ms pause between chunks
+                    let currentOffset = 0;
+
+                    for (let i = 0; i < partChunks.length; i++) {
+                        try {
+                            const res = await fetch(partChunks[i].audioUrl!);
+                            const ab = await res.arrayBuffer();
+                            const buffer = await new Promise<AudioBuffer>((resolve, reject) => {
+                                audioContext!.decodeAudioData(ab, resolve, reject);
+                            });
+                            audioBuffers.push({ buffer, startTime: currentOffset });
+                            currentOffset += buffer.duration + PAUSE_DURATION;
+                        } catch (e) { console.error("Error decoding in normal merge:", e); }
+                        
+                        setMergeProgress(Math.floor(progressOffset + (i / partChunks.length) * 90 * progressMultiplier));
                     }
-                    const mergedBlob = new Blob(blobs, { type: 'audio/mpeg' });
-                    const url = URL.createObjectURL(mergedBlob);
+
+                    if (audioBuffers.length === 0) continue;
+
+                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + item.buffer.duration), 0);
+                    const offlineCtx = new OfflineAudioContext(
+                        audioBuffers[0].buffer.numberOfChannels,
+                        Math.ceil((totalDuration + 0.1) * audioBuffers[0].buffer.sampleRate),
+                        audioBuffers[0].buffer.sampleRate
+                    );
+
+                    audioBuffers.forEach(item => {
+                        const source = offlineCtx.createBufferSource();
+                        source.buffer = item.buffer;
+                        source.connect(offlineCtx.destination);
+                        source.start(item.startTime);
+                    });
+
+                    const renderedBuffer = await offlineCtx.startRendering();
+                    const wavBlob = audioBufferToWav(renderedBuffer);
+                    const url = URL.createObjectURL(wavBlob);
                     finalParts.push({ url, startTime: 0, isTimed: false });
                 }
             }
@@ -221,6 +244,7 @@ export const TextToSpeech: React.FC<{
             });
 
             // Master Merge: Padding from 0s and strictly respecting SRT timecodes
+            // ALWAYS perform master merge if timed to ensure leading silence is preserved
             if (isTimedMerge || finalParts.length > 1) {
                 await mergeFinalPartsInternal(finalParts);
             } else {
@@ -367,12 +391,19 @@ export const TextToSpeech: React.FC<{
                     speaker,
                     token,
                     appkey: APP_KEY,
+                    speed,
                 }, signal);
                 if (!signal.aborted) {
                     updateChunk(chunk.id, { status: 'finished', audioUrl });
                 }
             } catch (err: any) {
-                if (signal.aborted || err.name === 'AbortError' || err.message === 'Aborted') return;
+                const isAbort = signal.aborted || 
+                                err.name === 'AbortError' || 
+                                err.message?.includes('Aborted') || 
+                                err.message?.includes('aborted') ||
+                                err.message?.includes('without reason');
+
+                if (isAbort) return;
                 
                 if (err.message?.includes('token') || err.message?.includes('401') || err.message?.includes('429')) {
                     keyManager.markKeyAsBad(token);
@@ -405,7 +436,7 @@ export const TextToSpeech: React.FC<{
             setProcessingState('idle');
         }
 
-    }, [chunks, speaker, concurrentThreads, requestDelay, updateChunk]);
+    }, [chunks, speaker, concurrentThreads, requestDelay, updateChunk, speed]);
 
     useEffect(() => {
         if (shouldProcess) {
@@ -475,6 +506,8 @@ export const TextToSpeech: React.FC<{
                 setConcurrentThreads={setConcurrentThreads}
                 requestDelay={requestDelay}
                 setRequestDelay={setRequestDelay}
+                speed={speed}
+                setSpeed={setSpeed}
             />
             <ResultsPanel
                 chunks={chunks}

@@ -5,6 +5,7 @@ interface SynthesizeOptions {
     speaker: string;
     token: string;
     appkey: string;
+    speed?: number;
 }
 
 // Helper to decode base64 string to Uint8Array for browser environment
@@ -46,6 +47,12 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
             settle(reject, new Error('Aborted'));
         };
 
+        const isAbortError = (err: any) => 
+            err.name === 'AbortError' || 
+            err.message?.includes('Aborted') || 
+            err.message?.includes('aborted') ||
+            err.message?.includes('without reason');
+
         if (signal) {
             signal.addEventListener('abort', onAbort);
         }
@@ -77,6 +84,12 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
+            // AliCloud speech_rate range is -500 to 500, default 0
+            // We map 1.0 -> 0, 0.5 -> -250, 2.0 -> 500 etc.
+            // A common mapping for TTS speed input (scale 0.5-2.0) to AliCloud integer:
+            // rate = (speed - 1.0) * 500
+            const speechRate = Math.max(-500, Math.min(500, Math.round(((options.speed || 1.0) - 1.0) * 500)));
+
             const payload = {
                 text: options.text,
                 speaker: options.speaker,
@@ -85,6 +98,7 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
                     sample_rate: 24000,
                     format: "mp3",
                 },
+                speech_rate: speechRate
             };
 
             const frame = {
@@ -133,7 +147,7 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
                            const audioUrl = URL.createObjectURL(audioBlob);
                            settle(resolve, audioUrl);
                        } catch(err: any) {
-                           if (err.name === 'AbortError' || signal?.aborted) {
+                           if (isAbortError(err) || (signal && signal.aborted)) {
                                settle(reject, new Error('Aborted'));
                            } else {
                                settle(reject, err);

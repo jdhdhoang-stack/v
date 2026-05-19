@@ -144,6 +144,8 @@ export class TextProcessor {
 
     public static fixSrtContent(content: string): string {
         // Robust SRT parser that can handle slightly broken formats
+        // Split by pattern that looks like start of a block (index followed by timing)
+        const timingRegex = /(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})/;
         const blocks = content.trim().split(/\n\s*\n/);
         const items: Array<{ index: number; start: number; end: number; text: string }> = [];
 
@@ -153,8 +155,6 @@ export class TextProcessor {
 
             // Find timing line
             let timingLineIdx = -1;
-            const timingRegex = /(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})/;
-            
             for (let i = 0; i < Math.min(3, lines.length); i++) {
                 if (timingRegex.test(lines[i])) {
                     timingLineIdx = i;
@@ -171,11 +171,17 @@ export class TextProcessor {
             const endStr = match[2].replace('.', ',');
             const start = this.parseTimestampToSeconds(startStr);
             const end = this.parseTimestampToSeconds(endStr);
-            const textLines = lines.slice(timingLineIdx + 1);
-            const text = textLines.join('\n').trim();
+            
+            // Text is everything after the timing line
+            let text = lines.slice(timingLineIdx + 1).join('\n').trim();
+            
+            // Sửa lỗi: Loại bỏ timeline lạc vào trong text
+            text = text.replace(timingRegex, '').trim();
+            // Loại bỏ các dòng chỉ có số (STT bị lạc)
+            text = text.split('\n').filter(line => !/^\d+$/.test(line.trim())).join('\n').trim();
 
-            if (text) {
-                items.push({ index: items.length + 1, start, end, text });
+            if (text && text.length > 0) {
+                items.push({ index: 0, start, end, text });
             }
         });
 
@@ -189,16 +195,15 @@ export class TextProcessor {
             const item = items[i];
             
             // Ensure end >= start
-            if (item.end < item.start) {
-                item.end = item.start + 2.0; // Default 2s if end is before start
+            if (item.end <= item.start) {
+                item.end = item.start + 2.0; 
             }
 
             // Check overlap with next item
             if (i < items.length - 1) {
                 const nextItem = items[i + 1];
                 if (item.end > nextItem.start) {
-                    // Reduce current end time to avoid overlap, but keep at least 0.1s duration
-                    item.end = Math.max(item.start + 0.1, nextItem.start - 0.01);
+                    item.end = Math.max(item.start + 0.1, nextItem.start - 0.05);
                 }
             }
         }
