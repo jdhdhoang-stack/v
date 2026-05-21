@@ -29,7 +29,7 @@ export const TextToSpeech: React.FC<{
     const [minCharsToMerge, setMinCharsToMerge] = useState(30);
     const [concurrentThreads, setConcurrentThreads] = useState(10);
     const [requestDelay, setRequestDelay] = useState(100);
-    const [speed, setSpeed] = useState(1.0);
+    const [speed, setSpeed] = useState(1.1);
     const [mergedAudioUrls, setMergedAudioUrls] = useState<Array<{ url: string, startTime: number, isTimed: boolean }>>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
