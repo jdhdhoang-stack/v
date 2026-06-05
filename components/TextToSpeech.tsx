@@ -30,6 +30,14 @@ export const TextToSpeech: React.FC<{
     const [concurrentThreads, setConcurrentThreads] = useState(10);
     const [requestDelay, setRequestDelay] = useState(100);
     const [speed, setSpeed] = useState(1.1);
+    const [debouncedSpeed, setDebouncedSpeed] = useState(1.1);
+
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedSpeed(speed);
+        }, 300);
+        return () => clearTimeout(handler);
+    }, [speed]);
     const [mergedAudioUrls, setMergedAudioUrls] = useState<Array<{ url: string, startTime: number, isTimed: boolean }>>([]);
     const [shouldProcess, setShouldProcess] = useState(false);
     
@@ -174,7 +182,7 @@ export const TextToSpeech: React.FC<{
                     
                     if (audioBuffers.length === 0) continue;
 
-                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + item.buffer.duration), 0);
+                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + (item.buffer.duration / debouncedSpeed)), 0);
                     const offlineCtx = new OfflineAudioContext(
                         audioBuffers[0].buffer.numberOfChannels,
                         Math.ceil((totalDuration + 0.1) * audioBuffers[0].buffer.sampleRate),
@@ -184,6 +192,7 @@ export const TextToSpeech: React.FC<{
                     audioBuffers.forEach(item => {
                         const source = offlineCtx.createBufferSource();
                         source.buffer = item.buffer;
+                        source.playbackRate.value = debouncedSpeed;
                         source.connect(offlineCtx.destination);
                         source.start(item.startTime);
                     });
@@ -208,7 +217,7 @@ export const TextToSpeech: React.FC<{
                                 audioContext!.decodeAudioData(ab, resolve, reject);
                             });
                             audioBuffers.push({ buffer, startTime: currentOffset });
-                            currentOffset += buffer.duration + PAUSE_DURATION;
+                            currentOffset += (buffer.duration / debouncedSpeed) + PAUSE_DURATION;
                         } catch (e) { console.error("Error decoding in normal merge:", e); }
                         
                         setMergeProgress(Math.floor(progressOffset + (i / partChunks.length) * 90 * progressMultiplier));
@@ -216,7 +225,7 @@ export const TextToSpeech: React.FC<{
 
                     if (audioBuffers.length === 0) continue;
 
-                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + item.buffer.duration), 0);
+                    const totalDuration = audioBuffers.reduce((max, item) => Math.max(max, item.startTime + (item.buffer.duration / debouncedSpeed)), 0);
                     const offlineCtx = new OfflineAudioContext(
                         audioBuffers[0].buffer.numberOfChannels,
                         Math.ceil((totalDuration + 0.1) * audioBuffers[0].buffer.sampleRate),
@@ -226,6 +235,7 @@ export const TextToSpeech: React.FC<{
                     audioBuffers.forEach(item => {
                         const source = offlineCtx.createBufferSource();
                         source.buffer = item.buffer;
+                        source.playbackRate.value = debouncedSpeed;
                         source.connect(offlineCtx.destination);
                         source.start(item.startTime);
                     });
@@ -258,7 +268,7 @@ export const TextToSpeech: React.FC<{
             setIsMerging(false);
             if (audioContext && typeof audioContext.close === 'function') await audioContext.close();
         }
-    }, [chunks, onAudioMerged, mergeFinalPartsInternal]);
+    }, [chunks, onAudioMerged, mergeFinalPartsInternal, debouncedSpeed]);
 
     const mergeFinalParts = useCallback(() => {
         mergeFinalPartsInternal(mergedAudioUrls);
@@ -508,6 +518,7 @@ export const TextToSpeech: React.FC<{
                 setRequestDelay={setRequestDelay}
                 speed={speed}
                 setSpeed={setSpeed}
+                isMergeComplete={mergedAudioUrls.length > 0 && !isMerging}
             />
             <ResultsPanel
                 chunks={chunks}

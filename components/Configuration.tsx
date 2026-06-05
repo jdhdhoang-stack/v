@@ -28,6 +28,7 @@ interface ConfigurationProps {
     setRequestDelay: (value: number) => void;
     speed: number;
     setSpeed: (value: number) => void;
+    isMergeComplete: boolean;
 }
 
 const TARGET_LANGS = [
@@ -44,7 +45,7 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
     onProcessQueue, onAddContent, pendingChunksCount,
     maxChars, setMaxChars, minCharsToMerge, setMinCharsToMerge,
     concurrentThreads, setConcurrentThreads, requestDelay, setRequestDelay,
-    speed, setSpeed
+    speed, setSpeed, isMergeComplete
 }) => {
     const [textToAdd, setTextToAdd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -227,23 +228,38 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                         </select>
                     </div>
                 </div>
-                
-                <div className="bg-[#1A1A1A] border border-[#262626] p-4 rounded-xl space-y-3">
+
+                <div className={`bg-[#1A1A1A] border border-[#262626] p-4 rounded-xl space-y-3 transition-all duration-200 ${!isMergeComplete ? 'border-amber-500/20 bg-amber-500/[0.02]' : ''}`}>
                     <div className="flex items-center justify-between">
                         <label className="text-xs font-bold text-gray-400 flex items-center gap-2 uppercase tracking-tight">
                             Tốc độ giọng đọc: <span className="text-blue-400 font-mono text-sm">{speed.toFixed(1)}x</span>
                         </label>
+                        {!isMergeComplete ? (
+                            <span className="text-[9px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider">
+                                Đợi file gộp
+                            </span>
+                        ) : (
+                            <span className="text-[9px] text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider animated pulse">
+                                Có thể chỉnh
+                            </span>
+                        )}
                     </div>
                     <input 
                         type="range" min="0.5" max="2.0" step="0.1" 
-                        value={speed} onChange={e => setSpeed(parseFloat(e.target.value))}
-                        className="w-full h-1.5 bg-[#0D0D0D] rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        value={speed} onChange={e => isMergeComplete && setSpeed(parseFloat(e.target.value))}
+                        disabled={!isMergeComplete}
+                        className="w-full h-1.5 bg-[#0D0D0D] rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
                     />
                     <div className="flex justify-between text-[8px] text-gray-600 font-bold uppercase tracking-widest px-1">
                         <span>Chậm</span>
                         <span>Bình thường</span>
                         <span>Nhanh</span>
                     </div>
+                    {!isMergeComplete && (
+                        <p className="text-[10px] text-gray-500 italic mt-1 leading-normal ml-0.5">
+                            * Cần gộp file audio thành công trước khi bắt đầu chỉnh tốc độ giọng đọc.
+                        </p>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

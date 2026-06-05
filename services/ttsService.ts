@@ -84,11 +84,9 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
-            // AliCloud speech_rate range is -500 to 500, default 0
-            // We map 1.0 -> 0, 0.5 -> -250, 2.0 -> 500 etc.
-            // A common mapping for TTS speed input (scale 0.5-2.0) to AliCloud integer:
-            // rate = (speed - 1.0) * 500
-            const speechRate = Math.max(-500, Math.min(500, Math.round(((options.speed || 1.0) - 1.0) * 500)));
+            // Force standard speech rate (0) at the API level so that speed changes can be applied
+            // dynamically and cleanly when merging the files via OfflineAudioContext without re-synthesizing.
+            const speechRate = 0;
 
             const payload = {
                 text: options.text,
