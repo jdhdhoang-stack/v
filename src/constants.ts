@@ -9,28 +9,28 @@ export const SPEAKER_GROUPS: SpeakerGroup[] = [
         "country": "Tiếng Việt",
         "speakers": [
             {
-                "id": "BV074_streaming",
-                "name": "Cute Female"
-            },
-            {
                 "id": "BV560_streaming",
-                "name": "Anh Dũng"
+                "name": "Anh Dũng (Nam trầm ấm - Bắc)"
             },
             {
                 "id": "BV562_streaming",
-                "name": "Chí Mai"
-            },
-            {
-                "id": "BV421_vivn_streaming",
-                "name": "Sweet Little Girl"
+                "name": "Chí Mai (Nữ ngọt ngào - Nam)"
             },
             {
                 "id": "vi_female_huong",
-                "name": "Giọng nữ phổ thông"
+                "name": "Thanh Tuyết (Nữ phổ thông)"
+            },
+            {
+                "id": "BV074_streaming",
+                "name": "Cô gái dễ thương (Cute Female)"
+            },
+            {
+                "id": "BV421_vivn_streaming",
+                "name": "Bé gái ngọt ngào (Sweet Little Girl)"
             },
             {
                 "id": "BV075_streaming",
-                "name": "Confident Male"
+                "name": "Nam tự tin (Confident Male)"
             }
         ]
     },
