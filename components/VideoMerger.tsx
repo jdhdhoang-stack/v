@@ -24,6 +24,11 @@ interface SubtitleConfig {
     color: string;
     shadow: boolean;
     enabled: boolean;
+    fontFamily?: string;
+    uppercase?: boolean;
+    strokeColor?: string;
+    strokeWidth?: number;
+    fontWeight?: string;
 }
 
 interface LogoConfig {
@@ -361,7 +366,26 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     // Subtitle Settings
     const [subtitleConfig, setSubtitleConfig] = useState<SubtitleConfig>(() => {
         const saved = localStorage.getItem(STORAGE_KEY_SUBTITLE);
-        return saved ? JSON.parse(saved) : { fontSize: 48, bottomMargin: 100, color: '#ffffff', shadow: true, enabled: true };
+        const defaults = { 
+            fontSize: 46, 
+            bottomMargin: 100, 
+            color: '#facc15', 
+            shadow: true, 
+            enabled: true,
+            fontFamily: 'Montserrat',
+            uppercase: true,
+            strokeColor: '#000000',
+            strokeWidth: 6,
+            fontWeight: '900'
+        };
+        if (saved) {
+            try {
+                return { ...defaults, ...JSON.parse(saved) };
+            } catch (e) {
+                return defaults;
+            }
+        }
+        return defaults;
     });
 
     // Logo Settings
@@ -830,7 +854,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             ctx.save();
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            ctx.font = `bold ${subtitleConfig.fontSize * scaleFactor}px Inter`;
+            
+            const fontFamily = subtitleConfig.fontFamily || 'Inter';
+            const fontWeight = subtitleConfig.fontWeight || 'bold';
+            ctx.font = `${fontWeight} ${subtitleConfig.fontSize * scaleFactor}px "${fontFamily}"`;
             
             if (subtitleConfig.shadow) {
                 ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
@@ -872,7 +899,25 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             }
 
             if (textToDraw) {
-                ctx.fillText(textToDraw, canvas.width / 2, canvas.height - (subtitleConfig.bottomMargin * scaleFactor));
+                if (subtitleConfig.uppercase) {
+                    textToDraw = textToDraw.toUpperCase();
+                }
+
+                const fontY = canvas.height - (subtitleConfig.bottomMargin * scaleFactor);
+
+                // Draw text outline / stroke first if set, so fill appears on top
+                const strokeWidth = subtitleConfig.strokeWidth !== undefined ? subtitleConfig.strokeWidth : 6;
+                if (strokeWidth > 0) {
+                    ctx.save();
+                    ctx.strokeStyle = subtitleConfig.strokeColor || '#000000';
+                    ctx.lineWidth = strokeWidth * scaleFactor;
+                    ctx.lineJoin = 'round';
+                    ctx.miterLimit = 2;
+                    ctx.strokeText(textToDraw, canvas.width / 2, fontY);
+                    ctx.restore();
+                }
+
+                ctx.fillText(textToDraw, canvas.width / 2, fontY);
             }
             ctx.restore();
         }
@@ -1732,10 +1777,57 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                     <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Cấu hình chữ & Phụ đề</h4>
                                                 </div>
 
-                                                <div className="p-6 bg-[#1A1A1A] rounded-2xl border border-[#262626] space-y-6">
+                                                <div className="p-6 bg-[#1A1A1A] rounded-2xl border border-[#262626] space-y-5">
+                                                    {/* Font Selection */}
+                                                    <div className="space-y-2">
+                                                        <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Phông chữ (Font Family)</span>
+                                                        <select 
+                                                            value={subtitleConfig.fontFamily || 'Montserrat'} 
+                                                            onChange={(e) => setSubtitleConfig(prev => ({ ...prev, fontFamily: e.target.value }))}
+                                                            className="w-full bg-[#121212] border border-[#333] text-gray-200 rounded-xl px-3 py-2.5 text-xs font-black uppercase tracking-wider focus:outline-none focus:border-blue-500 cursor-pointer"
+                                                        >
+                                                            <option value="Inter">Inter (Cơ bản)</option>
+                                                            <option value="Montserrat">Montserrat (Hiện đại, Đậm)</option>
+                                                            <option value="Oswald">Oswald (Chuyên nghiệp, Hẹp)</option>
+                                                            <option value="Roboto">Roboto (Sạch sẽ, Tối giản)</option>
+                                                            <option value="JetBrains Mono">JetBrains Mono (Công nghệ)</option>
+                                                            <option value="Playfair Display">Playfair Display (Nghệ thuật, Serif)</option>
+                                                        </select>
+                                                    </div>
+
+                                                    {/* Font Weight & Text Transform Grid */}
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div className="space-y-2">
+                                                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Độ dày chữ</span>
+                                                            <select 
+                                                                value={subtitleConfig.fontWeight || '900'} 
+                                                                onChange={(e) => setSubtitleConfig(prev => ({ ...prev, fontWeight: e.target.value }))}
+                                                                className="w-full bg-[#121212] border border-[#333] text-gray-200 rounded-xl px-3 py-2.5 text-xs font-black uppercase tracking-wider focus:outline-none focus:border-blue-500 cursor-pointer"
+                                                            >
+                                                                <option value="normal">Thường</option>
+                                                                <option value="bold">Đậm (Bold)</option>
+                                                                <option value="900">Siêu Đậm (Black)</option>
+                                                            </select>
+                                                        </div>
+
+                                                        <div className="space-y-2">
+                                                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Chữ viết hoa</span>
+                                                            <label className="flex items-center gap-3 bg-[#121212] border border-[#333] hover:border-[#444] transition-all rounded-xl p-2.5 cursor-pointer h-[38px]">
+                                                                <input 
+                                                                    type="checkbox" 
+                                                                    checked={subtitleConfig.uppercase || false} 
+                                                                    onChange={(e) => setSubtitleConfig(prev => ({ ...prev, uppercase: e.target.checked }))}
+                                                                    className="w-4 h-4 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-600 cursor-pointer"
+                                                                />
+                                                                <span className="text-[10px] font-black text-gray-300 uppercase tracking-wider select-none">UPPERCASE</span>
+                                                            </label>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Subtitle Font Size Slider */}
                                                     <div className="space-y-3">
                                                         <div className="flex justify-between items-center">
-                                                            <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Cỡ chữ (Px): {subtitleConfig.fontSize}</span>
+                                                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Cỡ chữ (Px): {subtitleConfig.fontSize}</span>
                                                         </div>
                                                         <input 
                                                             type="range" min="12" max="120" 
@@ -1745,9 +1837,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                         />
                                                     </div>
 
+                                                    {/* Bottom Position Slider */}
                                                     <div className="space-y-3">
                                                         <div className="flex justify-between items-center">
-                                                            <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Lề dưới (Offset): {subtitleConfig.bottomMargin}</span>
+                                                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Vị trí lề dưới: {subtitleConfig.bottomMargin}px</span>
                                                         </div>
                                                         <input 
                                                             type="range" min="20" max="400" 
@@ -1757,29 +1850,83 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                         />
                                                     </div>
 
-                                                    <div className="flex items-center justify-between pt-2">
-                                                        <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Màu sắc</span>
-                                                        <div className="flex gap-2">
-                                                            {['#ffffff', '#facc15', '#ef4444', '#3b82f6'].map(color => (
-                                                                <button 
-                                                                    key={color}
-                                                                    onClick={() => setSubtitleConfig(prev => ({ ...prev, color }))}
-                                                                    className={`w-6 h-6 rounded-full border-2 transition-all ${subtitleConfig.color === color ? 'border-white scale-110 shadow-lg' : 'border-transparent opacity-50 hover:opacity-100'}`}
-                                                                    style={{ backgroundColor: color }}
-                                                                />
-                                                            ))}
-                                                        </div>
+                                                    {/* Color Option Grid */}
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#262626]">
+                                                         {/* Text Color */}
+                                                         <div className="space-y-2">
+                                                             <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Màu chữ:</span>
+                                                             <div className="flex flex-wrap gap-2 items-center">
+                                                                 {['#ffffff', '#facc15', '#ef4444', '#3b82f6', '#4ade80'].map(color => (
+                                                                     <button 
+                                                                         key={color}
+                                                                         type="button"
+                                                                         onClick={() => setSubtitleConfig(prev => ({ ...prev, color }))}
+                                                                         className={`w-6 h-6 rounded-full border-2 transition-all ${subtitleConfig.color === color ? 'border-white scale-110 shadow-lg' : 'border-transparent opacity-50 hover:opacity-100'} cursor-pointer`}
+                                                                         style={{ backgroundColor: color }}
+                                                                         title={color}
+                                                                     />
+                                                                 ))}
+                                                                 <input 
+                                                                     type="color" 
+                                                                     value={subtitleConfig.color}
+                                                                     onChange={(e) => setSubtitleConfig(prev => ({ ...prev, color: e.target.value }))}
+                                                                     className="w-7 h-7 bg-transparent border-0 rounded cursor-pointer p-0"
+                                                                     title="Chọn màu tự do"
+                                                                 />
+                                                             </div>
+                                                         </div>
+
+                                                         {/* Stroke/Outline Color */}
+                                                         <div className="space-y-2">
+                                                             <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Màu viền chữ:</span>
+                                                             <div className="flex flex-wrap gap-2 items-center">
+                                                                 {['#000000', '#ffffff', '#ef4444', '#38bdf8'].map(color => (
+                                                                     <button 
+                                                                         key={color}
+                                                                         type="button"
+                                                                         onClick={() => setSubtitleConfig(prev => ({ ...prev, strokeColor: color }))}
+                                                                         className={`w-6 h-6 rounded-full border border-gray-600 transition-all ${subtitleConfig.strokeColor === color ? 'ring-2 ring-blue-500 scale-110 shadow-lg' : 'opacity-50 hover:opacity-100'} cursor-pointer`}
+                                                                         style={{ backgroundColor: color }}
+                                                                         title={color}
+                                                                     />
+                                                                 ))}
+                                                                 <input 
+                                                                     type="color" 
+                                                                     value={subtitleConfig.strokeColor || '#000000'}
+                                                                     onChange={(e) => setSubtitleConfig(prev => ({ ...prev, strokeColor: e.target.value }))}
+                                                                     className="w-7 h-7 bg-transparent border-0 rounded cursor-pointer p-0"
+                                                                     title="Chọn màu viền"
+                                                                 />
+                                                             </div>
+                                                         </div>
                                                     </div>
-                                                    
-                                                    <label className="flex items-center justify-between cursor-pointer pt-2">
-                                                        <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Đổ bóng (Text Shadow)</span>
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={subtitleConfig.shadow} 
-                                                            onChange={(e) => setSubtitleConfig(prev => ({ ...prev, shadow: e.target.checked }))}
-                                                            className="w-4 h-4 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-600"
-                                                        />
-                                                    </label>
+
+                                                    <div className="grid grid-cols-2 gap-4 items-center pt-2">
+                                                         {/* Line Outline Width */}
+                                                         <div className="space-y-2">
+                                                             <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">Độ dày viền: {subtitleConfig.strokeWidth !== undefined ? subtitleConfig.strokeWidth : 6}px</span>
+                                                             <input 
+                                                                 type="range" min="0" max="16" 
+                                                                 value={subtitleConfig.strokeWidth !== undefined ? subtitleConfig.strokeWidth : 6} 
+                                                                 onChange={(e) => setSubtitleConfig(prev => ({ ...prev, strokeWidth: parseInt(e.target.value) }))}
+                                                                 className="w-full h-1.5 bg-[#333] rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                                             />
+                                                         </div>
+
+                                                         {/* Text Shadow Checkbox */}
+                                                         <div className="space-y-2">
+                                                             <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block opacity-0">Đổ bóng</span>
+                                                             <label className="flex items-center justify-between cursor-pointer bg-[#121212] border border-[#333] hover:border-[#444] rounded-xl p-2.5 h-[38px] transition-all">
+                                                                 <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider select-none">Đổ bóng chữ</span>
+                                                                 <input 
+                                                                     type="checkbox" 
+                                                                     checked={subtitleConfig.shadow} 
+                                                                     onChange={(e) => setSubtitleConfig(prev => ({ ...prev, shadow: e.target.checked }))}
+                                                                     className="w-4 h-4 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-600 cursor-pointer"
+                                                                 />
+                                                             </label>
+                                                         </div>
+                                                     </div>
                                                 </div>
 
                                                 <button 

@@ -16,7 +16,7 @@ class KeyManager {
     private defaultSettings: AppSettings = {
         geminiKey: '',
         deepseekKey: '',
-        geminiModel: 'gemini-2.0-flash',
+        geminiModel: 'gemini-2.5-flash-lite',
         rawKeys: ''
     };
 

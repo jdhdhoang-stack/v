@@ -9,7 +9,7 @@ class AIService {
     }
 
     private getModel(): string {
-        return keyManager.getSettings().geminiModel || "gemini-2.0-flash";
+        return keyManager.getSettings().geminiModel || "gemini-2.5-flash-lite";
     }
 
     public async optimizeTextForTTS(text: string): Promise<string> {

@@ -4,9 +4,9 @@ import { keyManager } from '../services/keyManager';
 import { Settings2, Key, Cpu, Save, RefreshCw, AlertCircle, Info } from 'lucide-react';
 
 const GEMINI_MODELS = [
-    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Nhanh)' },
-    { id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro (Thông minh)' },
-    { id: 'gemini-2.0-flash-thinking-exp-01-21', name: 'Gemini 2.0 Thinking (Chuyên sâu)' },
+    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite (Nhanh & Tiết kiệm)' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Ổn định, Đa năng)' },
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Mới nhất)' },
     { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview' },
 ];
 
