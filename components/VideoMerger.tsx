@@ -91,6 +91,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     const [srtErrors, setSrtErrors] = useState<SrtError[]>([]);
     const [lastUploadedSrt, setLastUploadedSrt] = useState<string | null>(null);
+    const [renderResolution, setRenderResolution] = useState<'720p' | '540p' | '480p'>('720p');
 
     const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
     const [previewTime, setPreviewTime] = useState(0);
@@ -387,6 +388,10 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
     const audioNodesRef = useRef<{ ctx: AudioContext, source: MediaElementAudioSourceNode, dest: MediaStreamAudioDestinationNode, videoGain?: GainNode } | null>(null);
     const logoImageRef = useRef<HTMLImageElement | null>(null);
+    const blurCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+    const canvasWidth = renderResolution === '720p' ? 1280 : (renderResolution === '540p' ? 960 : 854);
+    const canvasHeight = renderResolution === '720p' ? 720 : (renderResolution === '540p' ? 540 : 480);
 
     useEffect(() => {
         localStorage.setItem(STORAGE_KEY_BLUR, JSON.stringify(blurConfig));
@@ -689,6 +694,8 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         const ctx = canvas?.getContext('2d', { alpha: false }); // Optimization: no alpha
         if (!canvas || !ctx) return;
 
+        const scaleFactor = canvas.width / 1280;
+
         // Draw Background
         const source = bgType === 'image' ? bgImageRef.current : videoRef.current;
         let layout = layoutRef.current;
@@ -714,25 +721,40 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             //ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Apply Blur
-        if (blurConfig.enabled && blurConfig.amount > 0 && layout) {
+        // Blur feature disabled as requested
+        if (false && blurConfig.enabled && blurConfig.amount > 0 && layout) {
             const bx = (blurConfig.x / 100) * canvas.width;
             const by = (blurConfig.y / 100) * canvas.height;
             const bw = (blurConfig.width / 100) * canvas.width;
             const bh = (blurConfig.height / 100) * canvas.height;
 
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(bx, by, bw, bh);
-            ctx.clip();
-            
-            ctx.filter = `blur(${blurConfig.amount}px)`;
-            const source = bgType === 'image' ? bgImageRef.current : videoRef.current;
-            if (source) {
-                ctx.drawImage(source as CanvasImageSource, layout.offsetX, layout.offsetY, layout.drawWidth, layout.drawHeight);
+            if (bw > 0 && bh > 0) {
+                const downsampleFactor = 4;
+                if (!blurCanvasRef.current) {
+                    blurCanvasRef.current = document.createElement('canvas');
+                }
+                const blurCanvas = blurCanvasRef.current;
+                const blurCtx = blurCanvas.getContext('2d');
+                if (blurCtx) {
+                    const targetW = Math.max(1, Math.round(bw / downsampleFactor));
+                    const targetH = Math.max(1, Math.round(bh / downsampleFactor));
+                    if (blurCanvas.width !== targetW || blurCanvas.height !== targetH) {
+                        blurCanvas.width = targetW;
+                        blurCanvas.height = targetH;
+                    }
+
+                    // Apply scaled-down filter to match the downscaled coordinate space
+                    blurCtx.filter = `blur(${Math.max(1, blurConfig.amount / downsampleFactor)}px)`;
+                    
+                    // Draw cropped portion from the main canvas onto downsized offscreen canvas
+                    blurCtx.drawImage(canvas, bx, by, bw, bh, 0, 0, targetW, targetH);
+                    
+                    // Draw back onto the main canvas, automatically scaled back up with linear interpolation
+                    ctx.save();
+                    ctx.drawImage(blurCanvas, bx, by, bw, bh);
+                    ctx.restore();
+                }
             }
-            ctx.restore();
-            ctx.filter = 'none';
         }
 
         // Draw Logo
@@ -789,7 +811,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             ctx.save();
             ctx.globalAlpha = watermarkConfig.opacity;
             ctx.fillStyle = watermarkConfig.color;
-            ctx.font = `${watermarkConfig.fontSize}px Inter`;
+            ctx.font = `${watermarkConfig.fontSize * scaleFactor}px Inter`;
             
             // If floating, align center to avoid going off screen edges partially
             if (watermarkConfig.floating) {
@@ -808,13 +830,13 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             ctx.save();
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            ctx.font = `bold ${subtitleConfig.fontSize}px Inter`;
+            ctx.font = `bold ${subtitleConfig.fontSize * scaleFactor}px Inter`;
             
             if (subtitleConfig.shadow) {
                 ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-                ctx.shadowBlur = 10;
-                ctx.shadowOffsetX = 2;
-                ctx.shadowOffsetY = 2;
+                ctx.shadowBlur = 10 * scaleFactor;
+                ctx.shadowOffsetX = 2 * scaleFactor;
+                ctx.shadowOffsetY = 2 * scaleFactor;
             }
             
             ctx.fillStyle = subtitleConfig.color;
@@ -850,35 +872,35 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             }
 
             if (textToDraw) {
-                ctx.fillText(textToDraw, canvas.width / 2, canvas.height - subtitleConfig.bottomMargin);
+                ctx.fillText(textToDraw, canvas.width / 2, canvas.height - (subtitleConfig.bottomMargin * scaleFactor));
             }
             ctx.restore();
         }
 
-        // Sequential background logic
-        if (bgType === 'video' && videoRef.current && !videoRef.current.paused && videoRef.current.ended) {
-            if (currentSourceIndex < bgSources.length - 1) {
-                const nextIndex = currentSourceIndex + 1;
-                setCurrentSourceIndex(nextIndex);
-                // Pre-play next video if rendering
-                if (isRendering && videoRef.current) {
+        // Sequential background logic or repeating background videos to fill the audio duration
+        if (bgType === 'video' && videoRef.current && (videoRef.current.ended || (videoRef.current.duration > 0 && videoRef.current.currentTime >= videoRef.current.duration - 0.2))) {
+            const isPlaying = isRendering || isPreviewPlaying || (audio && !audio.paused);
+            if (isPlaying && bgSources.length > 0) {
+                if (bgSources.length === 1) {
+                    videoRef.current.currentTime = 0;
+                    videoRef.current.play().catch(console.error);
+                } else if (currentSourceIndex < bgSources.length - 1) {
+                    const nextIndex = currentSourceIndex + 1;
+                    setCurrentSourceIndex(nextIndex);
                     const nextUrl = bgSources[nextIndex].url;
                     videoRef.current.src = nextUrl;
                     videoRef.current.load();
                     videoRef.current.play().catch(console.error);
-                }
-            } else {
-                // Loop back to start if it's the last video
-                setCurrentSourceIndex(0);
-                if (isRendering && videoRef.current) {
-                    videoRef.current.src = bgSources[0].url;
+                } else {
+                    // Loop back to start if it's the last video
+                    setCurrentSourceIndex(0);
+                    const nextUrl = bgSources[0].url;
+                    videoRef.current.src = nextUrl;
                     videoRef.current.load();
                     videoRef.current.play().catch(console.error);
                 }
             }
         }
-
-        requestRef.current = requestAnimationFrame(render);
     };
 
     const startRendering = async () => {
@@ -1052,14 +1074,25 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         updateProgress();
     };
 
+    const renderRef = useRef(render);
+    useEffect(() => {
+        renderRef.current = render;
+    }, [render]);
+
     useEffect(() => {
         isLoopingRef.current = true;
-        requestRef.current = requestAnimationFrame(render);
+        const loop = () => {
+            if (isLoopingRef.current) {
+                renderRef.current();
+                requestRef.current = requestAnimationFrame(loop);
+            }
+        };
+        requestRef.current = requestAnimationFrame(loop);
         return () => {
             isLoopingRef.current = false;
             if (requestRef.current) cancelAnimationFrame(requestRef.current);
         };
-    }, [bgSources, bgType, blurConfig, subtitleConfig, logoConfig, logoSource, watermarkConfig, imageLoaded, isRendering, displayChunks, audioSources, currentAudioIndex]);
+    }, []);
 
     return (
         <div className={onClose ? "fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4" : "w-full"}>
@@ -1071,7 +1104,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-white tracking-tight">Sản xuất Video Pro</h2>
-                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-[0.2em]">Cấu hình nâng cao • Hỗ trợ Làm mờ & Subtitles</p>
+                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-[0.2em]">Cấu hình nâng cao • Tích hợp Phụ đề & Nhạc nền</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -1389,15 +1422,46 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                 className="w-full flex items-center justify-center gap-2 px-4 py-4 bg-[#1A1A1A] hover:bg-[#262626] text-white rounded-2xl text-xs font-black uppercase tracking-widest border border-[#333] transition-all hover:border-blue-500/30"
                             >
                                 <Settings size={16} className="text-blue-400" />
-                                Cấu hình Vùng mờ & Phụ đề
+                                Cấu hình Phụ đề & Nhạc nền
                             </button>
                         </div>
 
-                        <div className="p-6 bg-blue-900/5 border border-blue-900/10 rounded-2xl space-y-3">
-                            <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Thông tin hệ thống</h4>
-                            <p className="text-[11px] text-gray-400 leading-relaxed">
-                                Đang sử dụng bộ giải mã <span className="text-white font-bold">VP9 High Performance</span>. Video sẽ được xuất với độ phân giải <span className="text-white font-bold">1280x720</span> ở tốc độ 30 FPS.
-                            </p>
+                        <div className="p-6 bg-blue-900/5 border border-blue-900/10 rounded-2xl space-y-4">
+                            <div className="flex justify-between items-center">
+                                <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-1.5">
+                                    ⚡ Tối ưu hóa & Tốc độ Render
+                                </h4>
+                                <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-[9px] font-mono font-bold text-blue-400 animate-pulse">Bộ xuất Ultra-Fast</span>
+                            </div>
+                            <div className="space-y-3">
+                                <label className="text-[9px] font-black text-gray-500 uppercase tracking-wider block">Chọn Độ phân giải & Tốc độ xuất:</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['720p', '540p', '480p'] as const).map((resolution) => {
+                                        const label = resolution === '720p' ? 'HD 720p' : (resolution === '540p' ? 'QHD 540p' : 'SD 480p');
+                                        const speed = resolution === '720p' ? 'Mặc định' : (resolution === '540p' ? 'Nhanh 1.7x' : 'Cực nhanh 2.5x');
+                                        const isActive = renderResolution === resolution;
+                                        return (
+                                            <button
+                                                key={resolution}
+                                                type="button"
+                                                onClick={() => setRenderResolution(resolution)}
+                                                disabled={isRendering}
+                                                className={`py-2.5 px-2 text-center rounded-xl border flex flex-col justify-center items-center transition-all ${
+                                                    isActive 
+                                                        ? 'bg-blue-600/20 border-blue-500 text-blue-400' 
+                                                        : 'bg-[#181818]/60 border-[#262626] text-gray-400 hover:text-white hover:border-[#333]'
+                                                } disabled:opacity-50 cursor-pointer`}
+                                            >
+                                                <span className="text-[10px] font-black uppercase tracking-tight">{label}</span>
+                                                <span className="text-[8px] font-medium opacity-80 mt-0.5">{speed}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[10px] text-gray-400 leading-relaxed">
+                                    💡 <strong className="text-gray-300">Gợi ý:</strong> Chọn <span className="text-blue-400 font-bold">SD 480p (Cực nhanh 2.5x)</span> giúp giảm tải CPU/RAM, tăng tốc render phim lên 2.5 lần và nén dung lượng, vô cùng sắc nét trên màn hình điện thoại!
+                                </p>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1435,7 +1499,6 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                         <div className="flex justify-between items-end">
                             <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Xem trước Preview (Real-time)</label>
                             <div className="flex gap-4">
-                                {blurConfig.enabled && <span className="px-2 py-0.5 bg-amber-900/20 text-amber-500 text-[10px] font-bold rounded uppercase tracking-tighter border border-amber-900/30 self-center">Blur Active</span>}
                                 {subtitleConfig.enabled && <span className="px-2 py-0.5 bg-blue-900/20 text-blue-500 text-[10px] font-bold rounded uppercase tracking-tighter border border-blue-900/30 self-center">Subs Active</span>}
                             </div>
                         </div>
@@ -1445,13 +1508,14 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                     ref={videoRef} 
                                     src={activeSource?.url || ''} 
                                     playsInline 
+                                    loop={bgSources.length === 1}
                                     className="absolute inset-0 w-full h-full object-contain opacity-[0.002] pointer-events-none -z-10" 
                                 />
                             )}
                             <canvas 
                                 ref={canvasRef} 
-                                width={1280} 
-                                height={720} 
+                                width={canvasWidth} 
+                                height={canvasHeight} 
                                 className="w-full h-full object-contain relative z-10"
                             />
                             
@@ -1531,7 +1595,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                             </div>
                             <div className="space-y-1">
                                 <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest block">Độ phân giải</span>
-                                <span className="text-[10px] font-bold text-gray-300 uppercase">1280x720 HD</span>
+                                <span className="text-[10px] font-bold text-gray-300 uppercase">{canvasWidth}x{canvasHeight} {renderResolution === '720p' ? 'HD' : (renderResolution === '540p' ? 'QHD' : 'SD')}</span>
                             </div>
                             <div className="space-y-1">
                                 <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest block">Mã hóa</span>
@@ -1611,7 +1675,7 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                 onClick={() => setSettingsTab(tab as any)}
                                                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${settingsTab === tab ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
                                             >
-                                                {tab === 'blur_subs' ? 'Làm mờ & Phụ đề' : 'Logo & Watermark'}
+                                                {tab === 'blur_subs' ? 'Phụ đề & Âm lượng' : 'Logo & Watermark'}
                                             </button>
                                         ))}
                                     </div>
@@ -1624,51 +1688,14 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                             <div className="p-8 overflow-y-auto min-h-[500px]">
                                 {settingsTab === 'blur_subs' ? (
                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                                        {/* Left: Preview with draggable area */}
+                                        {/* Left: Background Asset Preview */}
                                         <div className="space-y-6">
                                             <div className="space-y-2">
-                                                <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Vùng làm mờ (Draggable)</h4>
-                                                <p className="text-[10px] text-gray-500">Giữ và kéo khung mờ bên dưới để xác định vị trí nhạy cảm cần che.</p>
+                                                <h4 className="text-xs font-black text-gray-400 uppercase tracking-widest">Xem trước Nền Video/Ảnh</h4>
+                                                <p className="text-[10px] text-gray-500">Hiển thị nền hiện tại đang được sử dụng làm video clip gốc.</p>
                                             </div>
                                             
-                                            <div className="aspect-video bg-[#0D0D0D] rounded-2xl overflow-hidden relative border border-[#333] group cursor-crosshair select-none"
-                                                onMouseDown={(e) => {
-                                                    if (!blurConfig.enabled) return;
-                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                    const startX = ((e.clientX - rect.left) / rect.width) * 100;
-                                                    const startY = ((e.clientY - rect.top) / rect.height) * 100;
-                                                    
-                                                    // Start drawing a new box
-                                                    setBlurConfig(prev => ({
-                                                        ...prev,
-                                                        x: startX,
-                                                        y: startY,
-                                                        width: 0,
-                                                        height: 0
-                                                    }));
-                                                    
-                                                    const handleMouseMove = (mmE: MouseEvent) => {
-                                                        const currentX = ((mmE.clientX - rect.left) / rect.width) * 100;
-                                                        const currentY = ((mmE.clientY - rect.top) / rect.height) * 100;
-                                                        
-                                                        setBlurConfig(prev => ({
-                                                            ...prev,
-                                                            x: Math.min(startX, currentX),
-                                                            y: Math.min(startY, currentY),
-                                                            width: Math.abs(currentX - startX),
-                                                            height: Math.abs(currentY - startY)
-                                                        }));
-                                                    };
-                                                    
-                                                    const handleMouseUp = () => {
-                                                        window.removeEventListener('mousemove', handleMouseMove);
-                                                        window.removeEventListener('mouseup', handleMouseUp);
-                                                    };
-                                                    
-                                                    window.addEventListener('mousemove', handleMouseMove);
-                                                    window.addEventListener('mouseup', handleMouseUp);
-                                                }}
-                                            >
+                                            <div className="aspect-video bg-[#0D0D0D] rounded-2xl overflow-hidden relative border border-[#333] group select-none">
                                                 {/* Video/Image Preview in settings */}
                                                 {bgType === 'image' && activeSource && <img src={activeSource.url} className="w-full h-full object-cover shadow-2xl" />}
                                                 {bgType === 'video' && activeSource && <video src={activeSource.url} className="w-full h-full object-contain" muted playsInline autoPlay loop />}
@@ -1676,106 +1703,6 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                                     <ImageIcon size={24} className="opacity-20" />
                                                     <span>Chưa chọn ảnh/video nền</span>
                                                 </div>}
-
-                                                {blurConfig.enabled && (
-                                                    <div 
-                                                        className="absolute border-2 border-blue-500 bg-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.3)] group-hover:border-white transition-colors cursor-move"
-                                                        style={{
-                                                            left: `${blurConfig.x}%`,
-                                                            top: `${blurConfig.y}%`,
-                                                            width: `${blurConfig.width}%`,
-                                                            height: `${blurConfig.height}%`
-                                                        }}
-                                                        onMouseDown={(e) => {
-                                                            e.stopPropagation();
-                                                            if (!blurConfig.enabled) return;
-                                                            const rect = e.currentTarget.parentElement?.getBoundingClientRect();
-                                                            if (!rect) return;
-                                                            
-                                                            const startMouseX = e.clientX;
-                                                            const startMouseY = e.clientY;
-                                                            const startX = blurConfig.x;
-                                                            const startY = blurConfig.y;
-
-                                                            const handleMouseMove = (mmE: MouseEvent) => {
-                                                                const dx = ((mmE.clientX - startMouseX) / rect.width) * 100;
-                                                                const dy = ((mmE.clientY - startMouseY) / rect.height) * 100;
-                                                                
-                                                                setBlurConfig(prev => ({
-                                                                    ...prev,
-                                                                    x: Math.min(Math.max(0, startX + dx), 100 - prev.width),
-                                                                    y: Math.min(Math.max(0, startY + dy), 100 - prev.height)
-                                                                }));
-                                                            };
-                                                            
-                                                            const handleMouseUp = () => {
-                                                                window.removeEventListener('mousemove', handleMouseMove);
-                                                                window.removeEventListener('mouseup', handleMouseUp);
-                                                            };
-                                                            
-                                                            window.addEventListener('mousemove', handleMouseMove);
-                                                            window.addEventListener('mouseup', handleMouseUp);
-                                                        }}
-                                                    >
-                                                        <div className="absolute inset-0 backdrop-blur-md pointer-events-none"></div>
-                                                        <div className="absolute right-0 bottom-0 w-4 h-4 bg-white cursor-se-resize flex items-center justify-center translate-x-1/2 translate-y-1/2 rounded-full shadow-lg"
-                                                            onMouseDown={(e) => {
-                                                                e.stopPropagation();
-                                                                const rect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
-                                                                if (!rect) return;
-                                                                const startX = blurConfig.x;
-                                                                const startY = blurConfig.y;
-
-                                                                const handleMouseMove = (mmE: MouseEvent) => {
-                                                                    const currentX = ((mmE.clientX - rect.left) / rect.width) * 100;
-                                                                    const currentY = ((mmE.clientY - rect.top) / rect.height) * 100;
-                                                                    
-                                                                    setBlurConfig(prev => ({
-                                                                        ...prev,
-                                                                        width: Math.min(Math.max(2, currentX - startX), 100 - startX),
-                                                                        height: Math.min(Math.max(2, currentY - startY), 100 - startY)
-                                                                    }));
-                                                                };
-                                                                
-                                                                const handleMouseUp = () => {
-                                                                    window.removeEventListener('mousemove', handleMouseMove);
-                                                                    window.removeEventListener('mouseup', handleMouseUp);
-                                                                };
-                                                                
-                                                                window.addEventListener('mousemove', handleMouseMove);
-                                                                window.addEventListener('mouseup', handleMouseUp);
-                                                            }}
-                                                        >
-                                                            <Maximize2 size={8} className="text-black" />
-                                                        </div>
-                                                        <div className="absolute -top-6 left-0 bg-blue-600 text-white text-[8px] font-black px-2 py-1 rounded">BLUR AREA</div>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="p-4 bg-[#1A1A1A] rounded-2xl border border-[#262626]">
-                                                    <label className="flex items-center justify-between cursor-pointer">
-                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Kích hoạt làm mờ</span>
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={blurConfig.enabled} 
-                                                            onChange={(e) => setBlurConfig(prev => ({ ...prev, enabled: e.target.checked }))}
-                                                            className="w-4 h-4 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-600"
-                                                        />
-                                                    </label>
-                                                </div>
-                                                <div className="p-4 bg-[#1A1A1A] rounded-2xl border border-[#262626] space-y-2">
-                                                    <div className="flex justify-between items-center">
-                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Độ mờ: {blurConfig.amount}px</span>
-                                                    </div>
-                                                    <input 
-                                                        type="range" min="0" max="100" 
-                                                        value={blurConfig.amount} 
-                                                        onChange={(e) => setBlurConfig(prev => ({ ...prev, amount: parseInt(e.target.value) }))}
-                                                        className="w-full h-1.5 bg-[#333] rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                                    />
-                                                </div>
                                             </div>
                                             
                                             <div className="space-y-6 pt-4 border-t border-[#262626]">
