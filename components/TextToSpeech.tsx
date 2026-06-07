@@ -3,7 +3,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import type { ChunkJob, ProcessingState } from '../src/types';
 import { APP_KEY, SPEAKER_GROUPS } from '../src/constants';
 import { TextProcessor } from '../services/textProcessor';
-import { synthesizeChunk } from '../services/ttsService';
+import { synthesizeChunk, synthesizeEdgeTTS } from '../services/ttsService';
 import { Configuration } from './Configuration';
 import { ResultsPanel } from './ResultsPanel';
 import { keyManager } from '../services/keyManager';
@@ -23,6 +23,8 @@ export const TextToSpeech: React.FC<{
     const [speaker, setSpeaker] = useState<string>("BV074_streaming");
     const [selectedCountry, setSelectedCountry] = useState<string>(SPEAKER_GROUPS[0].country);
     const [processingState, setProcessingState] = useState<ProcessingState>('idle');
+    const [ttsService, setTtsService] = useState<'capcut' | 'edgetts'>('capcut');
+    const [edgeVoice, setEdgeVoice] = useState<string>('vi-VN-HoaiMyNeural');
     const [isMerging, setIsMerging] = useState(false);
     const [mergeProgress, setMergeProgress] = useState(0);
     const [maxChars, setMaxChars] = useState(1500);
@@ -373,11 +375,15 @@ export const TextToSpeech: React.FC<{
     }, []);
 
     const processQueue = useCallback(async () => {
-        const token = keyManager.getKey('tts');
+        let token = "";
         
-        if (!token) {
-            alert("Vui lòng nhập API Key trong phần Cài đặt (Dòng 1) trước khi bắt đầu.");
-            return;
+        if (ttsService === 'capcut') {
+            const fetchedToken = keyManager.getKey('tts');
+            if (!fetchedToken) {
+                alert("Vui lòng nhập API Key trong phần Cài đặt (Dòng 1) trước khi bắt đầu.");
+                return;
+            }
+            token = fetchedToken;
         }
 
         setProcessingState('processing');
@@ -396,13 +402,23 @@ export const TextToSpeech: React.FC<{
             updateChunk(chunk.id, { status: 'processing', error: null });
             
             try {
-                const audioUrl = await synthesizeChunk({
-                    text: chunk.text,
-                    speaker,
-                    token,
-                    appkey: APP_KEY,
-                    speed,
-                }, signal);
+                let audioUrl = "";
+                if (ttsService === 'capcut') {
+                    audioUrl = await synthesizeChunk({
+                        text: chunk.text,
+                        speaker,
+                        token,
+                        appkey: APP_KEY,
+                        speed,
+                    }, signal);
+                } else {
+                    audioUrl = await synthesizeEdgeTTS({
+                        text: chunk.text,
+                        voice: edgeVoice,
+                        speed,
+                    }, signal);
+                }
+
                 if (!signal.aborted) {
                     updateChunk(chunk.id, { status: 'finished', audioUrl });
                 }
@@ -415,7 +431,7 @@ export const TextToSpeech: React.FC<{
 
                 if (isAbort) return;
                 
-                if (err.message?.includes('token') || err.message?.includes('401') || err.message?.includes('429')) {
+                if (ttsService === 'capcut' && (err.message?.includes('token') || err.message?.includes('401') || err.message?.includes('429'))) {
                     keyManager.markKeyAsBad(token);
                 }
 
@@ -427,14 +443,17 @@ export const TextToSpeech: React.FC<{
         
         const queue = [...chunksToProcess];
         
-        const workerPromises = Array(concurrentThreads).fill(null).map(async () => {
+        const actualConcurrency = ttsService === 'edgetts' ? Math.min(2, concurrentThreads) : concurrentThreads;
+        const actualDelay = ttsService === 'edgetts' ? Math.max(500, requestDelay) : requestDelay;
+
+        const workerPromises = Array(actualConcurrency).fill(null).map(async () => {
             while (queue.length > 0) {
                 if (signal.aborted) break;
                 const chunk = queue.shift();
                 if (chunk) {
                     await processSingleChunk(chunk);
-                    if (requestDelay > 0 && !signal.aborted) {
-                        await new Promise(resolve => setTimeout(resolve, requestDelay));
+                    if (actualDelay > 0 && !signal.aborted) {
+                        await new Promise(resolve => setTimeout(resolve, actualDelay));
                     }
                 }
             }
@@ -446,7 +465,7 @@ export const TextToSpeech: React.FC<{
             setProcessingState('idle');
         }
 
-    }, [chunks, speaker, concurrentThreads, requestDelay, updateChunk, speed]);
+    }, [chunks, speaker, concurrentThreads, requestDelay, updateChunk, speed, ttsService, edgeVoice]);
 
     useEffect(() => {
         if (shouldProcess) {
@@ -519,6 +538,10 @@ export const TextToSpeech: React.FC<{
                 speed={speed}
                 setSpeed={setSpeed}
                 isMergeComplete={mergedAudioUrls.length > 0 && !isMerging}
+                ttsService={ttsService}
+                setTtsService={setTtsService}
+                edgeVoice={edgeVoice}
+                setEdgeVoice={setEdgeVoice}
             />
             <ResultsPanel
                 chunks={chunks}

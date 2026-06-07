@@ -92,6 +92,17 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const [srtErrors, setSrtErrors] = useState<SrtError[]>([]);
     const [lastUploadedSrt, setLastUploadedSrt] = useState<string | null>(null);
 
+    const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+    const [previewTime, setPreviewTime] = useState(0);
+    const [previewDuration, setPreviewDuration] = useState(0);
+
+    const formatTime = (secs: number) => {
+        if (isNaN(secs) || !isFinite(secs)) return '0:00';
+        const m = Math.floor(secs / 60);
+        const s = Math.floor(secs % 60);
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+    };
+
     const validateSrt = (chunks: ChunkJob[]) => {
         const errors: SrtError[] = [];
         const timecodeRegex = /\d{2}:\d{2}:\d{2}[.,]\d{3}/;
@@ -423,6 +434,64 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
             audioRef.current.load();
         }
     }, [activeAudioUrl]);
+
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const handlePlay = () => {
+            setIsPreviewPlaying(true);
+            if (videoRef.current && bgType === 'video' && videoRef.current.paused && !isRendering) {
+                videoRef.current.play().catch(console.error);
+            }
+        };
+        const handlePause = () => {
+            setIsPreviewPlaying(false);
+            if (videoRef.current && bgType === 'video' && !videoRef.current.paused) {
+                videoRef.current.pause();
+            }
+        };
+        const handleTimeUpdate = () => setPreviewTime(audio.currentTime);
+        const handleDurationChange = () => setPreviewDuration(audio.duration || 0);
+        const handleEnded = () => {
+            setIsPreviewPlaying(false);
+            setPreviewTime(0);
+            if (videoRef.current) {
+                videoRef.current.pause();
+                videoRef.current.currentTime = 0;
+            }
+        };
+
+        audio.addEventListener('play', handlePlay);
+        audio.addEventListener('pause', handlePause);
+        audio.addEventListener('timeupdate', handleTimeUpdate);
+        audio.addEventListener('durationchange', handleDurationChange);
+        audio.addEventListener('ended', handleEnded);
+
+        return () => {
+            audio.removeEventListener('play', handlePlay);
+            audio.removeEventListener('pause', handlePause);
+            audio.removeEventListener('timeupdate', handleTimeUpdate);
+            audio.removeEventListener('durationchange', handleDurationChange);
+            audio.removeEventListener('ended', handleEnded);
+        };
+    }, [bgType, isRendering]);
+
+    const handleSeek = (newTime: number) => {
+        const audio = audioRef.current;
+        if (audio) {
+            audio.currentTime = newTime;
+            setPreviewTime(newTime);
+            if (videoRef.current && bgType === 'video') {
+                const vid = videoRef.current;
+                if (vid.duration) {
+                    vid.currentTime = newTime % vid.duration;
+                } else {
+                    vid.currentTime = newTime;
+                }
+            }
+        }
+    };
 
     useEffect(() => {
         if (bgType === 'image' && activeSource?.url) {
@@ -823,41 +892,49 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         // Lower FPS to 30 for faster and more stable encoding on more devices
         const stream = canvas.captureStream(30);
         
-        if (!audioNodesRef.current) {
-            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' });
-            const dest = audioContext.createMediaStreamDestination();
-            
-            // Subtitle Audio (Foreground)
-            const source = audioContext.createMediaElementSource(audio);
-            const mainGain = audioContext.createGain();
-            mainGain.gain.value = 1.0;
-            source.connect(mainGain);
-            mainGain.connect(dest);
-            mainGain.connect(audioContext.destination);
-
-            // Background Video Audio (Low Volume)
-            let createdVideoGain: GainNode | undefined;
-            if (videoRef.current) {
-                try {
-                    const videoSource = audioContext.createMediaElementSource(videoRef.current);
-                    const videoGain = audioContext.createGain();
-                    videoGain.gain.value = bgAudioVolume;
-                    videoSource.connect(videoGain);
-                    videoGain.connect(dest);
-                    videoGain.connect(audioContext.destination);
-                    createdVideoGain = videoGain;
-                } catch (e) {
-                    console.warn("Could not connect video audio: ", e);
-                }
+        // Dynamic cleanup/rebuild of audio context to prevent overlapping/frozen streams
+        if (audioNodesRef.current) {
+            try {
+                await audioNodesRef.current.ctx.close();
+            } catch (e) {
+                console.warn("Could not close previous audio context:", e);
             }
-
-            audioNodesRef.current = { ctx: audioContext, source: mainGain as any, dest, videoGain: createdVideoGain };
+            audioNodesRef.current = null;
         }
-        const dest = audioNodesRef.current.dest;
+
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' });
+        const dest = audioContext.createMediaStreamDestination();
+        
+        // Subtitle Audio (Foreground)
+        const source = audioContext.createMediaElementSource(audio);
+        const mainGain = audioContext.createGain();
+        mainGain.gain.value = 1.0;
+        source.connect(mainGain);
+        mainGain.connect(dest);
+        mainGain.connect(audioContext.destination);
+
+        // Background Video Audio (Low Volume)
+        let createdVideoGain: GainNode | undefined;
+        if (videoRef.current && bgType === 'video') {
+            try {
+                const videoSource = audioContext.createMediaElementSource(videoRef.current);
+                const videoGain = audioContext.createGain();
+                videoGain.gain.value = bgAudioVolume;
+                videoSource.connect(videoGain);
+                videoGain.connect(dest);
+                videoGain.connect(audioContext.destination);
+                createdVideoGain = videoGain;
+            } catch (e) {
+                console.warn("Could not connect video audio: ", e);
+            }
+        }
+
+        audioNodesRef.current = { ctx: audioContext, source: mainGain as any, dest, videoGain: createdVideoGain };
+        const destNode = audioNodesRef.current.dest;
         
         const combinedStream = new MediaStream([
             ...stream.getVideoTracks(),
-            ...dest.stream.getAudioTracks()
+            ...destNode.stream.getAudioTracks()
         ]);
 
         let mimeType = 'video/webm;codecs=vp9';
@@ -915,9 +992,34 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
         // Start recorder ONLY AFTER media is confirmed playing
         recorder.start();
 
-        const totalAudioDuration = audioSources.length > 0 
-            ? audioSources.reduce((acc, s) => acc + (s.duration || 0), 0)
-            : audio.duration || 0;
+        // Calculate total audio duration with strict loading assurance
+        let totalAudioDuration = 0;
+        if (audioSources.length > 0) {
+            totalAudioDuration = audioSources.reduce((acc, s) => acc + (s.duration || 0), 0);
+        } else {
+            totalAudioDuration = audio.duration;
+            if (isNaN(totalAudioDuration) || !isFinite(totalAudioDuration) || totalAudioDuration <= 0) {
+                // Wait for audio metadata to load
+                await new Promise<void>((resolve) => {
+                    if (audio.readyState >= 1) { // HAVE_METADATA or higher
+                        resolve();
+                    } else {
+                        audio.addEventListener('loadedmetadata', () => resolve(), { once: true });
+                        setTimeout(resolve, 3000); // 3 seconds safety timeout
+                    }
+                });
+                totalAudioDuration = audio.duration || 0;
+            }
+        }
+
+        // Final fallback if duration is still invalid
+        if (isNaN(totalAudioDuration) || !isFinite(totalAudioDuration) || totalAudioDuration <= 0) {
+            if (displayChunks.length > 0) {
+                totalAudioDuration = displayChunks[displayChunks.length - 1].endTime || 10;
+            } else {
+                totalAudioDuration = 10;
+            }
+        }
 
         const updateProgress = () => {
             if (totalAudioDuration > 0) {
@@ -1338,15 +1440,23 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                             </div>
                         </div>
                         <div className="aspect-video w-full bg-black rounded-[2.5rem] border border-[#222] overflow-hidden relative shadow-inner group">
+                            {bgType === 'video' && (
+                                <video 
+                                    ref={videoRef} 
+                                    src={activeSource?.url || ''} 
+                                    playsInline 
+                                    className="absolute inset-0 w-full h-full object-contain opacity-[0.002] pointer-events-none -z-10" 
+                                />
+                            )}
                             <canvas 
                                 ref={canvasRef} 
                                 width={1280} 
                                 height={720} 
-                                className="w-full h-full object-contain"
+                                className="w-full h-full object-contain relative z-10"
                             />
                             
                             {isRendering && (
-                                <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center animate-in fade-in duration-500">
+                                <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center animate-in fade-in duration-500 z-20">
                                     <div className="relative h-24 w-24 mb-6">
                                         <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full"></div>
                                         <div className="absolute inset-0 border-4 border-t-blue-500 rounded-full animate-spin"></div>
@@ -1359,6 +1469,52 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
                                     <p className="text-gray-500 text-[10px] mt-1 underline cursor-not-allowed">Vui lòng không đóng trình duyệt</p>
                                 </div>
                             )}
+                        </div>
+
+                        {/* Thanh điều khiển video & phụ đề trực tiếp block */}
+                        <div className="flex items-center gap-4 p-4 bg-[#141414] border border-[#262626] rounded-2xl">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const audio = audioRef.current;
+                                    if (audio) {
+                                        if (audio.paused) {
+                                            audio.play().catch(console.error);
+                                        } else {
+                                            audio.pause();
+                                        }
+                                    }
+                                }}
+                                disabled={isRendering || bgSources.length === 0}
+                                className="p-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 rounded-xl transition-all text-white flex items-center justify-center shrink-0"
+                                title={isPreviewPlaying ? 'Tạm dừng thử' : 'Chạy thử xem trực tiếp phụ đề'}
+                            >
+                                {isPreviewPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => handleSeek(0)}
+                                disabled={isRendering || bgSources.length === 0}
+                                className="px-3 py-2 bg-[#222] hover:bg-[#333] disabled:opacity-30 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-white transition-all shrink-0"
+                            >
+                                Tua đầu
+                            </button>
+
+                            <input
+                                type="range"
+                                min="0"
+                                max={previewDuration || 100}
+                                step="0.05"
+                                value={previewTime}
+                                onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                                disabled={isRendering || bgSources.length === 0}
+                                className="flex-grow h-1.5 bg-[#262626] rounded-lg appearance-none cursor-pointer accent-blue-500 disabled:opacity-30"
+                            />
+
+                            <span className="text-xs font-mono text-gray-400 select-none min-w-[80px] text-right shrink-0">
+                                {formatTime(previewTime)} / {formatTime(previewDuration)}
+                            </span>
                         </div>
                         
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4 bg-[#141414] border border-[#262626] rounded-2xl">
@@ -1385,7 +1541,6 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
                         <div className="absolute opacity-0 pointer-events-none w-[1px] h-[1px] overflow-hidden -z-10">
                              <audio ref={audioRef} src={audioUrl} />
-                             {bgType === 'video' && <video ref={videoRef} src={activeSource?.url || ''} playsInline />}
                         </div>
                     </div>
                 </div>

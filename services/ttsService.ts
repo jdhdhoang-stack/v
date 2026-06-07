@@ -207,3 +207,53 @@ export const synthesizeChunk = (options: SynthesizeOptions, signal?: AbortSignal
         };
     });
 };
+
+export const synthesizeEdgeTTS = async (
+  options: { text: string; voice: string; speed?: number },
+  signal?: AbortSignal
+): Promise<string> => {
+  const speedVal = options.speed ?? 1.0;
+  const percentage = Math.round((speedVal - 1.0) * 100);
+  const rateStr = percentage >= 0 ? `+${percentage}%` : `${percentage}%`;
+
+  const response = await fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: options.text,
+      voice: options.voice,
+      rate: rateStr,
+      volume: "+0%",
+      pitch: "+0Hz"
+    }),
+    signal
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Edge TTS failed: ${errText || response.statusText}`);
+  }
+
+  const result = await response.json();
+  if (!result.success || !result.audioBase64) {
+    throw new Error(result.error || "Edge TTS synthesis failed");
+  }
+
+  const b64Data = result.audioBase64;
+  const sliceSize = 512;
+  const byteCharacters = atob(b64Data);
+  const byteArrays = [];
+
+  for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+    const slice = byteCharacters.slice(offset, offset + sliceSize);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    byteArrays.push(byteArray);
+  }
+
+  const audioBlob = new Blob(byteArrays, { type: "audio/mpeg" });
+  return URL.createObjectURL(audioBlob);
+};

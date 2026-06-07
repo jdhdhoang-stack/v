@@ -22,6 +22,16 @@ export interface ChunkJob {
 
 export type ProcessingState = 'idle' | 'processing';
 
+export interface Voice {
+  Name: string;
+  ShortName: string;
+  Gender: string;
+  Locale: string;
+  SuggestedCodec: string;
+  FriendlyName: string;
+  Status: string;
+}
+
 declare global {
   interface Window {
     aistudio: {

@@ -1,8 +1,9 @@
 
 import React, { useState, memo, useCallback, useEffect, useMemo } from 'react';
-import type { SpeakerGroup } from '../src/types';
+import type { SpeakerGroup, Voice } from '../src/types';
+import { FALLBACK_VOICES } from '../src/edgeVoices';
 import { FileUpload } from './FileUpload';
-import { Settings2, Wand2, Sparkles, Loader2, Languages, ArrowRight, AlertTriangle, CheckCircle2, Clipboard } from 'lucide-react';
+import { Settings2, Wand2, Sparkles, Loader2, Languages, ArrowRight, AlertTriangle, CheckCircle2, Clipboard, Search, Check } from 'lucide-react';
 import { aiService } from '../services/aiService';
 import { TextProcessor } from '../services/textProcessor';
 import { TranslationService, TranslationEngine } from '../services/translationService';
@@ -29,6 +30,10 @@ interface ConfigurationProps {
     speed: number;
     setSpeed: (value: number) => void;
     isMergeComplete: boolean;
+    ttsService: 'capcut' | 'edgetts';
+    setTtsService: (service: 'capcut' | 'edgetts') => void;
+    edgeVoice: string;
+    setEdgeVoice: (voice: string) => void;
 }
 
 const TARGET_LANGS = [
@@ -45,7 +50,8 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
     onProcessQueue, onAddContent, pendingChunksCount,
     maxChars, setMaxChars, minCharsToMerge, setMinCharsToMerge,
     concurrentThreads, setConcurrentThreads, requestDelay, setRequestDelay,
-    speed, setSpeed, isMergeComplete
+    speed, setSpeed, isMergeComplete,
+    ttsService, setTtsService, edgeVoice, setEdgeVoice
 }) => {
     const [textToAdd, setTextToAdd] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -53,6 +59,65 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
     const [isOptimizing, setIsOptimizing] = useState(false);
     const [isTranslating, setIsTranslating] = useState(false);
     const [translateProgress, setTranslateProgress] = useState(0);
+
+    // Edge TTS Voice management and caching
+    const [voices, setVoices] = useState<Voice[]>([]);
+    const [isLoadingVoices, setIsLoadingVoices] = useState(false);
+    const [vietnameseOnly, setVietnameseOnly] = useState(true);
+    const [genderFilter, setGenderFilter] = useState<'all' | 'male' | 'female'>('all');
+    const [searchTerm, setSearchTerm] = useState('');
+
+    useEffect(() => {
+        if (ttsService === 'edgetts' && voices.length === 0) {
+            const fetchVoices = async () => {
+                setIsLoadingVoices(true);
+                try {
+                    const response = await fetch("/api/voices");
+                    const data = await response.json();
+                    if (data.success && Array.isArray(data.voices)) {
+                        setVoices(data.voices);
+                    } else {
+                        setVoices(FALLBACK_VOICES);
+                    }
+                } catch (e) {
+                    setVoices(FALLBACK_VOICES);
+                } finally {
+                    setIsLoadingVoices(false);
+                }
+            };
+            fetchVoices();
+        }
+    }, [ttsService, voices.length]);
+
+    const activeVoicesList = useMemo(() => {
+        return voices.length > 0 ? voices : FALLBACK_VOICES;
+    }, [voices]);
+
+    const filteredVoices = useMemo(() => {
+        return activeVoicesList.filter(voice => {
+            if (vietnameseOnly && !voice.Locale.toLowerCase().startsWith('vi')) {
+                return false;
+            }
+            if (genderFilter !== 'all') {
+                if (genderFilter === 'male' && voice.Gender?.toLowerCase() !== 'male') return false;
+                if (genderFilter === 'female' && voice.Gender?.toLowerCase() !== 'female') return false;
+            }
+            if (searchTerm.trim() !== '') {
+                const query = searchTerm.toLowerCase();
+                const fName = (voice.FriendlyName || '').toLowerCase();
+                const sName = (voice.ShortName || '').toLowerCase();
+                const locale = (voice.Locale || '').toLowerCase();
+                return fName.includes(query) || sName.includes(query) || locale.includes(query);
+            }
+            return true;
+        });
+    }, [activeVoicesList, vietnameseOnly, genderFilter, searchTerm]);
+
+    useEffect(() => {
+        if (ttsService === 'edgetts' && filteredVoices.length > 0 && !filteredVoices.some(v => v.ShortName === edgeVoice)) {
+            setEdgeVoice(filteredVoices[0].ShortName);
+        }
+    }, [ttsService, filteredVoices, edgeVoice, setEdgeVoice]);
 
     // SRT states
     const [srtErrors, setSrtErrors] = useState<SrtError[]>([]);
@@ -200,34 +265,126 @@ export const Configuration: React.FC<ConfigurationProps> = memo(({
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-gray-400 ml-1">Ngôn ngữ</label>
-                        <select
-                            value={selectedCountry}
-                            onChange={(e) => onCountryChange(e.target.value)}
-                            className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                {/* Dịch vụ TTS Toggle Selector */}
+                <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400 flex items-center gap-1.5 uppercase tracking-wide ml-1">
+                        Dịch vụ giọng đọc (TTS)
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#1A1A1A] border border-[#262626] rounded-xl">
+                        <button
+                            type="button"
+                            onClick={() => setTtsService('capcut')}
+                            className={`py-2 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${ttsService === 'capcut' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:bg-[#222222] hover:text-gray-200'}`}
                         >
-                            {speakerGroups.map(group => (
-                                <option key={group.country} value={group.country}>{group.country}</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-gray-400 ml-1">Hồ sơ Giọng nói</label>
-                        <select
-                            value={speaker}
-                            onChange={(e) => setSpeaker(e.target.value)}
-                            className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all disabled:opacity-50"
-                            disabled={availableSpeakers.length === 0}
+                            <span>CapCut Cloud</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setTtsService('edgetts')}
+                            className={`py-2 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${ttsService === 'edgetts' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:bg-[#222222] hover:text-gray-200'}`}
                         >
-                            {availableSpeakers.map(spk => (
-                                <option key={spk.id} value={spk.id}>{spk.name}</option>
-                            ))}
-                        </select>
+                            <span>Microsoft Edge (Free)</span>
+                        </button>
                     </div>
                 </div>
+
+                {ttsService === 'capcut' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-200">
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-gray-400 ml-1">Ngôn ngữ</label>
+                            <select
+                                value={selectedCountry}
+                                onChange={(e) => onCountryChange(e.target.value)}
+                                className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all cursor-pointer"
+                            >
+                                {speakerGroups.map(group => (
+                                    <option key={group.country} value={group.country}>{group.country}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-gray-400 ml-1">Hồ sơ Giọng nói</label>
+                            <select
+                                value={speaker}
+                                onChange={(e) => setSpeaker(e.target.value)}
+                                className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all disabled:opacity-50 cursor-pointer"
+                                disabled={availableSpeakers.length === 0}
+                            >
+                                {availableSpeakers.map(spk => (
+                                    <option key={spk.id} value={spk.id}>{spk.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                        {/* Filters Row */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {/* Search */}
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-semibold text-gray-400 ml-1 flex items-center gap-1">
+                                    <Search size={12} />Tìm kiếm
+                                </label>
+                                <input
+                                    type="text"
+                                    placeholder="Tìm Edge voice (HoaiMy, NamMinh...)"
+                                    value={searchTerm}
+                                    onChange={e => setSearchTerm(e.target.value)}
+                                    className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-xs text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-500"
+                                />
+                            </div>
+
+                            {/* Gender selector */}
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-semibold text-gray-400 ml-1">Giới tính</label>
+                                <div className="flex bg-[#1A1A1A] border border-[#262626] rounded-lg p-1 h-[42px] items-center">
+                                    {(['all', 'male', 'female'] as const).map(g => (
+                                        <button
+                                            key={g}
+                                            type="button"
+                                            onClick={() => setGenderFilter(g)}
+                                            className={`flex-1 py-1.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${genderFilter === g ? 'bg-[#2D2D2D] text-blue-400 shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
+                                        >
+                                            {g === 'all' ? 'Tất cả' : g === 'male' ? 'Nam' : 'Nữ'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Dropdown list for voices */}
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between px-1">
+                                <label className="text-xs font-semibold text-gray-400">Giọng đọc Microsoft Edge ({filteredVoices.length})</label>
+                                <label className="flex items-center gap-1.5 text-[11px] text-gray-500 select-none cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={vietnameseOnly}
+                                        onChange={e => setVietnameseOnly(e.target.checked)}
+                                        className="rounded border-[#262626] bg-[#0D0D0D] text-blue-500 accent-blue-500 w-3.5 h-3.5"
+                                    />
+                                    <span>Chỉ Tiếng Việt (vi-VN)</span>
+                                </label>
+                            </div>
+
+                            <select
+                                value={edgeVoice}
+                                onChange={(e) => setEdgeVoice(e.target.value)}
+                                className="w-full bg-[#1A1A1A] border border-[#262626] rounded-lg p-2.5 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all cursor-pointer"
+                            >
+                                {filteredVoices.map(voice => (
+                                    <option key={voice.ShortName} value={voice.ShortName}>
+                                        {voice.FriendlyName ? voice.FriendlyName.replace("Microsoft ", "").replace("Neural", "") : voice.ShortName} ({voice.Gender === 'Female' ? 'Nữ' : 'Nam'} - {voice.Locale})
+                                    </option>
+                                ))}
+                                {filteredVoices.length === 0 && (
+                                    <option value="" disabled>Không tìm thấy giọng đọc nào...</option>
+                                )}
+                            </select>
+                        </div>
+                    </div>
+                )}
 
                 <div className={`bg-[#1A1A1A] border border-[#262626] p-4 rounded-xl space-y-3 transition-all duration-200 ${!isMergeComplete ? 'border-amber-500/20 bg-amber-500/[0.02]' : ''}`}>
                     <div className="flex items-center justify-between">
