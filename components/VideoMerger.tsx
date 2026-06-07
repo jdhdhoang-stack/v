@@ -414,6 +414,47 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
     const logoImageRef = useRef<HTMLImageElement | null>(null);
     const blurCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+    // Refs to track state specifically for unmount cleanup (preventing memory leaks of blob URLs)
+    const bgSourcesRef = useRef(bgSources);
+    const logoSourceRef = useRef(logoSource);
+
+    useEffect(() => {
+        bgSourcesRef.current = bgSources;
+    }, [bgSources]);
+
+    useEffect(() => {
+        logoSourceRef.current = logoSource;
+    }, [logoSource]);
+
+    useEffect(() => {
+        return () => {
+            // Unmount memory leak cleanup: revoke active ObjectURLs
+            bgSourcesRef.current.forEach(s => {
+                if (s.url && s.url.startsWith('blob:')) {
+                    try {
+                        URL.revokeObjectURL(s.url);
+                    } catch (e) {
+                        console.warn("Could not revoke bgSource object URL on unmount:", e);
+                    }
+                }
+            });
+            if (logoSourceRef.current && logoSourceRef.current.startsWith('blob:')) {
+                try {
+                    URL.revokeObjectURL(logoSourceRef.current);
+                } catch (e) {
+                    console.warn("Could not revoke logoSource object URL on unmount:", e);
+                }
+            }
+            if (audioNodesRef.current) {
+                try {
+                    audioNodesRef.current.ctx.close();
+                } catch (e) {
+                    console.warn("Could not close audio context on unmount:", e);
+                }
+            }
+        };
+    }, []);
+
     const canvasWidth = renderResolution === '720p' ? 1280 : (renderResolution === '540p' ? 960 : 854);
     const canvasHeight = renderResolution === '720p' ? 720 : (renderResolution === '540p' ? 540 : 480);
 
@@ -905,19 +946,47 @@ export const VideoMerger: React.FC<VideoMergerProps> = ({
 
                 const fontY = canvas.height - (subtitleConfig.bottomMargin * scaleFactor);
 
-                // Draw text outline / stroke first if set, so fill appears on top
-                const strokeWidth = subtitleConfig.strokeWidth !== undefined ? subtitleConfig.strokeWidth : 6;
-                if (strokeWidth > 0) {
-                    ctx.save();
-                    ctx.strokeStyle = subtitleConfig.strokeColor || '#000000';
-                    ctx.lineWidth = strokeWidth * scaleFactor;
-                    ctx.lineJoin = 'round';
-                    ctx.miterLimit = 2;
-                    ctx.strokeText(textToDraw, canvas.width / 2, fontY);
-                    ctx.restore();
+                // Auto-wrap subtitles if they exceed 85% of the video canvas width
+                const words = textToDraw.split(/\s+/);
+                const lines: string[] = [];
+                let currentLine = '';
+                const maxTextWidth = canvas.width * 0.85;
+
+                for (let i = 0; i < words.length; i++) {
+                    const testLine = currentLine ? currentLine + ' ' + words[i] : words[i];
+                    const testWidth = ctx.measureText(testLine).width;
+                    if (testWidth > maxTextWidth && currentLine) {
+                        lines.push(currentLine);
+                        currentLine = words[i];
+                    } else {
+                        currentLine = testLine;
+                    }
+                }
+                if (currentLine) {
+                    lines.push(currentLine);
                 }
 
-                ctx.fillText(textToDraw, canvas.width / 2, fontY);
+                // Standard optimal line spacing for typography
+                const subtitleFontSize = subtitleConfig.fontSize * scaleFactor;
+                const lineHeight = subtitleFontSize * 1.25;
+
+                // Render lines bottom-up aligned with the baseline anchor to maintain margin integrity
+                lines.forEach((line, index) => {
+                    const lineY = fontY - (lines.length - 1 - index) * lineHeight;
+                    const strokeWidth = subtitleConfig.strokeWidth !== undefined ? subtitleConfig.strokeWidth : 6;
+                    
+                    if (strokeWidth > 0) {
+                        ctx.save();
+                        ctx.strokeStyle = subtitleConfig.strokeColor || '#000000';
+                        ctx.lineWidth = strokeWidth * scaleFactor;
+                        ctx.lineJoin = 'round';
+                        ctx.miterLimit = 2;
+                        ctx.strokeText(line, canvas.width / 2, lineY);
+                        ctx.restore();
+                    }
+
+                    ctx.fillText(line, canvas.width / 2, lineY);
+                });
             }
             ctx.restore();
         }
